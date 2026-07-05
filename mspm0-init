@@ -1385,15 +1385,34 @@ def main():
         cmd_regenerate(args)
     elif args.command == "new" or hasattr(args, "name"):
         cmd_new(args)
-    else:
-        # No subcommand given and no backward-compat match — show help
-        print("\nUsage: mspm0-init <subcommand> [options]\n")
-        print("Subcommands:")
-        print("  new           Create a new MSPM0 project")
-        print("  regenerate    Re-run SysConfig for an existing project")
-        print("\nTry: mspm0-init new -n my_project    (auto-discovers .syscfg)")
-        print("     mspm0-init regenerate            (inside a project dir)")
-        sys.exit(0)
+    elif args.command is None:
+        # No subcommand — intelligently detect context
+        cwd = Path.cwd()
+        has_syscfg = list(cwd.glob("*.syscfg"))
+        has_cmake = (cwd / "CMakeLists.txt").exists()
+
+        if has_cmake and has_syscfg:
+            # Looks like an existing project — regenerate
+            info(f"Detected existing project with .syscfg — auto-regenerating")
+            sys.argv = [sys.argv[0], "regenerate", str(cwd)]
+            cmd_regenerate(parse_args())
+        elif has_syscfg:
+            # Has config but no project yet — prompt for name and create
+            print(f"\nFound .syscfg: {has_syscfg[0].name}")
+            name = input("Project name: ").strip()
+            if name:
+                sys.argv = [sys.argv[0], "new", str(has_syscfg[0]), "-n", name]
+                cmd_new(parse_args())
+            else:
+                info("Cancelled")
+        else:
+            print("\nUsage: mspm0-init <subcommand> [options]\n")
+            print("Subcommands:")
+            print("  new           Create a new MSPM0 project")
+            print("  regenerate    Re-run SysConfig for an existing project")
+            print("\nTry: mspm0-init new -n my_project    (auto-discovers .syscfg)")
+            print("     mspm0-init regenerate            (inside a project dir)")
+            sys.exit(0)
 
 
 if __name__ == "__main__":
