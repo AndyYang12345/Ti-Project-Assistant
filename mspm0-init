@@ -35,8 +35,35 @@ from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 
 # =============================================================================
-# Default paths (adjust to your installation)
+# Platform abstraction — all OS-specific defaults live here
 # =============================================================================
+IS_WIN = sys.platform == "win32"
+
+# Ti tools base directory
+if IS_WIN:
+    _TI_BASE = os.environ.get("TI_ROOT", "C:\\ti")
+else:
+    _TI_BASE = os.environ.get("TI_ROOT", os.path.expanduser("~/ti"))
+
+# SysConfig CLI entry point
+_SYSCONFIG_CLI_NAME = "sysconfig_cli.bat" if IS_WIN else "sysconfig_cli.sh"
+
+# OpenOCD / GDB default locations
+if IS_WIN:
+    _CCS_BASE = os.environ.get("CCS_BASE", "C:\\ti")
+    _OPENOCD_FALLBACK = os.path.join(_CCS_BASE, "ccs_base", "DebugServer", "bin", "openocd.exe")
+    _GDB_FALLBACK = os.path.join(_CCS_BASE, "ccs_base", "DebugServer", "bin", "arm-none-eabi-gdb.exe")
+else:
+    _OPENOCD_FALLBACK = os.path.expanduser(
+        "~/.config/Texas Instruments/ti-embedded-debug/openocd/1.3.1.50"
+    )
+    _GDB_FALLBACK = os.path.expanduser(
+        "~/.config/Texas Instruments/ti-embedded-debug/arm-none-eabi-gdb/14.2.rel1.1"
+    )
+
+# CMake generator
+_CMAKE_GENERATOR = "Ninja" if IS_WIN else "Unix Makefiles"
+
 
 def _discover_dir(base: str, pattern: str) -> Optional[str]:
     """Scan <base> for directories matching <pattern>. Return first (sorted) match."""
@@ -54,31 +81,27 @@ def _resolve_sdk() -> str:
     env = os.environ.get("MSPM0_SDK")
     if env and os.path.isdir(os.path.join(env, ".metadata")):
         return env
-    discovered = _discover_dir(os.path.expanduser("~/ti"), r"mspm0_sdk_\d+.*")
+    discovered = _discover_dir(_TI_BASE, r"mspm0_sdk_\d+.*")
     if discovered:
         return discovered
-    return os.path.expanduser("~/ti/mspm0_sdk_2_10_00_04")
+    return os.path.join(_TI_BASE, "mspm0_sdk_2_10_00_04")
 
 
 def _resolve_sysconfig() -> str:
     """Resolve SysConfig path: env var > auto-discover > hardcoded default."""
     env = os.environ.get("SYSCONFIG_DIR")
-    if env and os.path.isfile(os.path.join(env, "sysconfig_cli.sh")):
+    if env and os.path.isfile(os.path.join(env, _SYSCONFIG_CLI_NAME)):
         return env
-    discovered = _discover_dir(os.path.expanduser("~/ti"), r"sysconfig_\d+.*")
+    discovered = _discover_dir(_TI_BASE, r"sysconfig_\d+.*")
     if discovered:
         return discovered
-    return os.path.expanduser("~/ti/sysconfig_1.27.1")
+    return os.path.join(_TI_BASE, "sysconfig_1.27.1")
 
 
 DEFAULT_SDK_DIR = _resolve_sdk()
 DEFAULT_SYSCONFIG_DIR = _resolve_sysconfig()
-DEFAULT_OPENOCD_DIR = os.path.expanduser(
-    "~/.config/Texas Instruments/ti-embedded-debug/openocd/1.3.1.50"
-)
-DEFAULT_GDB_DIR = os.path.expanduser(
-    "~/.config/Texas Instruments/ti-embedded-debug/arm-none-eabi-gdb/14.2.rel1.1"
-)
+DEFAULT_OPENOCD_DIR = os.environ.get("OPENOCD_DIR", _OPENOCD_FALLBACK)
+DEFAULT_GDB_DIR = os.environ.get("GDB_DIR", _GDB_FALLBACK)
 
 # =============================================================================
 # Chip mapping table — device_define -> hardware params + SDK resource paths
@@ -237,7 +260,7 @@ def validate_environment(args: argparse.Namespace) -> bool:
         ok = False
 
     # SysConfig CLI (Called via shell script, internally launches node)
-    sysconfig_cli = os.path.join(args.sysconfig, "sysconfig_cli.sh")
+    sysconfig_cli = os.path.join(args.sysconfig, _SYSCONFIG_CLI_NAME)
     if not os.path.isfile(sysconfig_cli):
         error(f"SysConfig CLI not found: {sysconfig_cli}")
         error("Set SYSconfig_DIR env var or use --sysconfig to specify path")
@@ -675,7 +698,7 @@ TASKS_JSON_TEMPLATE = """\
             "command": "cmake",
             "args": [
                 "-B", "build",
-                "-G", "Unix Makefiles",
+                "-G", _CMAKE_GENERATOR,
                 "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
                 "."
             ],
@@ -761,7 +784,7 @@ CPP_PROPERTIES_TEMPLATE = """\
     "configurations": [
         {{
             "name": "{device_name} ARM GCC",
-            "compilerPath": "/usr/bin/arm-none-eabi-gcc",
+            "compilerPath": "{compiler_path}",
             "compilerArgs": [
                 "-mcpu={cpu}",
                 "-mthumb",
@@ -873,14 +896,30 @@ def write_launch_json(project_dir: str, ctx: dict, dry_run: bool = False):
     )
     debugger_label = "CMSIS-DAP" if debugger == "cmsis-dap" else "XDS110"
 
+    # Build OpenOCD paths, handling Windows variants
+    openocd_dir = ctx["openocd_dir"]
+    if IS_WIN and openocd_dir.endswith(".exe"):
+        # openocd_dir already points to openocd.exe (from CCS fallback)
+        openocd_bin = openocd_dir
+        openocd_scripts = os.path.join(os.path.dirname(openocd_dir), "..", "scripts")
+    else:
+        openocd_exe = "openocd.exe" if IS_WIN else "openocd"
+        openocd_bin = os.path.join(openocd_dir, "bin", openocd_exe)
+        openocd_scripts = os.path.join(openocd_dir, "share", "openocd", "scripts")
+
+    # Normalize: JSON-friendly forward slashes
+    openocd_bin = openocd_bin.replace("\\", "/")
+    openocd_scripts = openocd_scripts.replace("\\", "/")
+    gdb_dir = ctx["gdb_dir"].replace("\\", "/")
+
     content = LAUNCH_JSON_TEMPLATE.format(
         device_name=ctx["device_name"],
         debugger_label=debugger_label,
         project_name=ctx["project_name"],
         config_files=config_files,
-        openocd_scripts=os.path.join(ctx["openocd_dir"], "share", "openocd", "scripts"),
-        openocd_bin=os.path.join(ctx["openocd_dir"], "bin", "openocd"),
-        gdb_dir=ctx["gdb_dir"],
+        openocd_scripts=openocd_scripts,
+        openocd_bin=openocd_bin,
+        gdb_dir=gdb_dir,
     )
 
     dest = os.path.join(project_dir, ".vscode", "launch.json")
@@ -896,12 +935,14 @@ def write_cpp_properties(project_dir: str, ctx: dict, dry_run: bool = False):
     """Generate .vscode/c_cpp_properties.json."""
     defines = [ctx["device_define"], "__USE_SYSCONFIG__"]
     defines_json = ",\n                ".join(f'"{d}"' for d in defines)
+    gcc_path = shutil.which("arm-none-eabi-gcc") or "/usr/bin/arm-none-eabi-gcc"
 
     content = CPP_PROPERTIES_TEMPLATE.format(
         device_name=ctx["device_name"],
         cpu=ctx["cpu"],
         sdk_dir=ctx["sdk_dir"],
         defines_json=defines_json,
+        compiler_path=gcc_path.replace("\\", "\\\\"),
     )
 
     dest = os.path.join(project_dir, ".vscode", "c_cpp_properties.json")
@@ -1173,7 +1214,7 @@ def cmd_regenerate(args):
 
     # ---- Validate env ----
     info("--- Validate environment ---")
-    sysconfig_cli = os.path.join(args.sysconfig, "sysconfig_cli.sh")
+    sysconfig_cli = os.path.join(args.sysconfig, _SYSCONFIG_CLI_NAME)
     if not os.path.isfile(sysconfig_cli):
         error(f"SysConfig CLI not found: {sysconfig_cli}")
         sys.exit(1)
