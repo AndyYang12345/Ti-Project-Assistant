@@ -1383,8 +1383,17 @@ def main():
 
     if args.command == "regenerate":
         cmd_regenerate(args)
-    else:
+    elif args.command == "new" or hasattr(args, "name"):
         cmd_new(args)
+    else:
+        # No subcommand given and no backward-compat match — show help
+        print("\nUsage: mspm0-init <subcommand> [options]\n")
+        print("Subcommands:")
+        print("  new           Create a new MSPM0 project")
+        print("  regenerate    Re-run SysConfig for an existing project")
+        print("\nTry: mspm0-init new -n my_project    (auto-discovers .syscfg)")
+        print("     mspm0-init regenerate            (inside a project dir)")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
