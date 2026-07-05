@@ -1,50 +1,55 @@
 # TI Project Assistant
 
+[中文版](README.md)
+
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue)](https://github.com/AndyYang12345/Ti-Project-Assistant)
 [![Python](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![MSPM0](https://img.shields.io/badge/chip-MSPM0-red)](https://www.ti.com/microcontrollers-mcus-processors/arm-based-microcontrollers/mspm0/overview.html)
-[![GitHub release](https://img.shields.io/badge/version-v0.1.0-informational)](https://github.com/AndyYang12345/Ti-Project-Assistant)
+[![Version](https://img.shields.io/badge/version-v0.1.0-informational)](https://github.com/AndyYang12345/Ti-Project-Assistant)
 
-One-click CLI tool to bootstrap a **TI MSPM0** embedded project from a [SysConfig](https://www.ti.com/tool/SYSCONFIG) graphical configuration file.  
-No CCS required — just a `.syscfg`, and you get a fully buildable CMake + ARM GCC project with VSCode debug support.
-
----
-
-## Features
-
-- **`new`** — create a new project from `.syscfg` (or `--device` for bare-metal)
-- **`regenerate`** — re-run SysConfig after modifying pin/peripheral config, keeping hand-written code untouched
-- **Auto-discover** SDK & SysConfig installations under `~/ti/` (Linux) or `C:\ti\` (Windows)
-- **Auto-discover** `.syscfg` files in the current directory
-- Generates: `CMakeLists.txt`, linker script, `main.c`, `main.h`, `.vscode/` configs
-- Supports **CMSIS-DAP** and **XDS110** debug probes
+**One command** to bootstrap a complete TI MSPM0 embedded project from a [SysConfig](https://www.ti.com/tool/SYSCONFIG) file. No CCS required.
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Create a .syscfg with SysConfig GUI, then:
-mspm0-init new -n my_blinky
+# 1. Configure your chip and pins in SysConfig GUI, save .syscfg to an empty dir, then:
+mspm0-init
 
 # 2. Build
-cd my_blinky
 cmake --build build -j$(nproc)
 
 # 3. Debug (VSCode)
 code .
-# Press F5 → CMSIS-DAP or XDS110
+# Press F5 → choose CMSIS-DAP or XDS110
 ```
 
-### Modify config later
+After modifying config:
 
 ```bash
-# Edit your .syscfg in SysConfig GUI, then:
-cd my_blinky
-mspm0-init regenerate
-# → Only generated files are updated. Your src/ code is safe.
+mspm0-init regenerate    # Only generated files are updated. Your src/ code is safe.
 ```
+
+---
+
+## Features
+
+| Subcommand | Purpose |
+|------------|---------|
+| (no args) | Auto-detect `.syscfg` in current dir, create project in-place |
+| `new` | Create a new project from `.syscfg` |
+| `regenerate` | Re-run SysConfig after pin/peripheral changes, **leaving hand-written code untouched** |
+
+The script automates:
+
+- Invokes SysConfig CLI to generate `ti_msp_dl_config.c/h`, linker script
+- Parses chip model, auto-maps SDK startup files and driverlib
+- Creates standard project directory structure
+- Generates `CMakeLists.txt` (arm-none-eabi-gcc toolchain)
+- Generates `.vscode/` configs (`launch.json` / `tasks.json` / `c_cpp_properties.json`)
+- Auto cmake configure + build verification
 
 ---
 
@@ -55,15 +60,15 @@ mspm0-init regenerate
 | Dependency | Version | Install |
 |-----------|---------|---------|
 | Python | ≥ 3.8 | `sudo apt install python3` |
-| ARM GCC Toolchain | 13.x | `sudo apt install gcc-arm-none-eabi` |
+| ARM GCC | 13.x | `sudo apt install gcc-arm-none-eabi` |
 | CMake | ≥ 3.13 | `sudo apt install cmake` |
 | Ninja | any | `sudo apt install ninja-build` |
 | TI MSPM0 SDK | 2.x | [Download](https://www.ti.com/tool/MSPM0-SDK) → extract to `~/ti/` |
 | TI SysConfig | 1.x | [Download](https://www.ti.com/tool/SYSCONFIG) → extract to `~/ti/` |
-| OpenOCD (TI fork) | 1.3.x | Included with [CCS Theia](https://www.ti.com/tool/CCSTUDIO) or [ti-embedded-debug](https://dev.ti.com/gallery/view/2966040/ti-embedded-debug/) |
+| OpenOCD (TI fork) | 1.3.x | Included with [CCS Theia](https://www.ti.com/tool/CCSTUDIO) |
 | arm-none-eabi-gdb | 14.x | Same as OpenOCD |
 
-**One-liner:**
+One-liner:
 
 ```bash
 sudo apt install python3 gcc-arm-none-eabi cmake ninja-build
@@ -74,7 +79,7 @@ sudo apt install python3 gcc-arm-none-eabi cmake ninja-build
 | Dependency | Version | Install |
 |-----------|---------|---------|
 | Python | ≥ 3.8 | [python.org](https://www.python.org/downloads/) or `winget install Python.Python.3.12` |
-| ARM GCC Toolchain | 13.x | [arm Developer](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads) → add `bin\` to PATH |
+| ARM GCC | 13.x | [arm Developer](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads) → add `bin\` to PATH |
 | CMake | ≥ 3.13 | [cmake.org](https://cmake.org/download/) or `winget install Kitware.CMake` |
 | Ninja | any | [ninja-build.org](https://ninja-build.org/) or `winget install Ninja-build.Ninja` |
 | TI MSPM0 SDK | 2.x | [Download](https://www.ti.com/tool/MSPM0-SDK) → extract to `C:\ti\` |
@@ -86,7 +91,7 @@ sudo apt install python3 gcc-arm-none-eabi cmake ninja-build
 
 ## Environment Variables
 
-All are **optional**. If unset, the tool auto-discovers installations under the Ti base directory.
+All are **optional**. The tool auto-discovers installations if unset.
 
 | Variable | Linux default | Windows default | Description |
 |----------|--------------|-----------------|-------------|
@@ -105,7 +110,7 @@ export MSPM0_SDK=~/ti/mspm0_sdk_2_10_00_04
 export SYSCONFIG_DIR=~/ti/sysconfig_1.27.1
 ```
 
-**Windows** — set in System Environment Variables or PowerShell profile:
+**Windows** — set in System Environment Variables or PowerShell:
 
 ```powershell
 $env:MSPM0_SDK = "C:\ti\mspm0_sdk_2_10_00_04"
@@ -117,8 +122,11 @@ $env:TI_ROOT = "C:\ti"
 
 ## Usage
 
+### Create a new project
+
 ```bash
-# ── Create a new project ──
+# Simplest: run in a directory with only a .syscfg file
+mspm0-init
 
 # Auto-discover .syscfg in current dir
 mspm0-init new -n my_project
@@ -128,20 +136,37 @@ mspm0-init new myboard.syscfg -n my_project -d xds110
 
 # Without syscfg (bare-metal start)
 mspm0-init new --device MSPM0G3507 --package "LQFP-48(PT)" -n bare_start
+```
 
-# ── Regenerate after config change ──
+### Regenerate config
 
+```bash
 mspm0-init regenerate               # inside project dir
 mspm0-init regenerate /path/to/proj # specify path
+```
 
-# ── Options ──
+`regenerate` backs up old files to `.sysconfig_backup/`. Use `--no-backup` to skip.
 
--o, --output DIR      Output directory (default: ./<name>/)
--s, --sdk PATH        MSPM0 SDK path
---sysconfig PATH      SysConfig install dir
--d, --debugger TYPE   cmsis-dap (default) | xds110 | none
---dry-run             Preview only, don't create files
---no-build            Skip cmake build verification
+### All options
+
+```
+mspm0-init new [syscfg] -n NAME [options]
+
+  -n, --name NAME        Project name (required)
+  -o, --output DIR       Output directory (default: ./<name>/)
+  -s, --sdk PATH         MSPM0 SDK path
+  --sysconfig PATH       SysConfig install dir
+  -d, --debugger TYPE    cmsis-dap (default) | xds110 | none
+  --device DEVICE        Specify chip manually, e.g. MSPM0G3507
+  --package PACKAGE      Specify package, e.g. LQFP-48(PT)
+  --dry-run              Preview only, don't create files
+  --no-build             Skip cmake build verification
+
+mspm0-init regenerate [project_dir] [options]
+
+  --no-build             Skip rebuild
+  --no-backup            Don't backup old files
+  --dry-run              Preview mode
 ```
 
 ---
@@ -178,9 +203,26 @@ my_project/
 [![MSPM0G3505](https://img.shields.io/badge/MSPM0G3505-64KB%20Flash%20%7C%2016KB%20SRAM-red)](https://www.ti.com/product/MSPM0G3505)
 [![MSPM0L1306](https://img.shields.io/badge/MSPM0L1306-64KB%20Flash%20%7C%208KB%20SRAM-red)](https://www.ti.com/product/MSPM0L1306)
 
-Adding a new chip: add an entry to `CHIP_MAP` in the script.
+Add an entry to `CHIP_MAP` in the script to support more chips.
 
 ---
+
+## Dependency Graph
+
+```
+mspm0-init
+├── SysConfig 1.x ────────────── Generates ti_msp_dl_config.c/h, linker script
+├── MSPM0 SDK 2.x
+│   ├── driverlib.a ──────────── Hardware abstraction layer
+│   ├── startup_*.c ──────────── Interrupt vector table + startup code
+│   ├── CMSIS Core ───────────── Cortex-M0+ register definitions
+│   └── DeviceFamily.h ──────── Chip family macros
+├── arm-none-eabi-gcc 13.x ──── Cross-compiler
+├── CMake + Ninja ───────────── Build system
+├── OpenOCD 1.3.x ───────────── GDB Server + flashing
+├── arm-none-eabi-gdb 14.x ──── Source-level debug
+└── VS Code + Cortex-Debug ──── IDE integration
+```
 
 ## Development
 
@@ -188,11 +230,13 @@ Adding a new chip: add an entry to `CHIP_MAP` in the script.
 git clone git@github.com:AndyYang12345/Ti-Project-Assistant.git
 cd ti-project-assistant
 
-# install as CLI tool
-ln -s $(pwd)/mspm0-init ~/bin/mspm0-init   # Linux
-# or add to PATH on Windows
+# Install to PATH (Linux)
+ln -s $(pwd)/mspm0-init ~/bin/mspm0-init
 
-# branches
-# main    — stable Linux
-# windows — Windows-compatible
+# Install to PATH (Windows)
+# Add ti-project-assistant directory to system PATH
 ```
+
+## License
+
+[MIT](LICENSE)

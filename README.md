@@ -7,19 +7,39 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![MSPM0](https://img.shields.io/badge/芯片-MSPM0-red)](https://www.ti.com/microcontrollers-mcus-processors/arm-based-microcontrollers/mspm0/overview.html)
 [![Version](https://img.shields.io/badge/版本-v0.1.0-informational)](https://github.com/AndyYang12345/Ti-Project-Assistant)
-[![GitHub stars](https://img.shields.io/github/stars/AndyYang12345/Ti-Project-Assistant?style=social)](https://github.com/AndyYang12345/Ti-Project-Assistant)
 
-**一行命令**，从 [SysConfig](https://www.ti.com/tool/SYSCONFIG) 图形化配置出发，自动生成完整的 TI MSPM0 嵌入式项目。
-
-告别 CCS 手动配置 — 你只需用 SysConfig 配好芯片和引脚，剩下的交给脚本。
+**一行命令**，从 [SysConfig](https://www.ti.com/tool/SYSCONFIG) 图形化配置出发，自动生成完整的 TI MSPM0 嵌入式项目。告别 CCS 手动配置。
 
 ---
 
-## 功能概览
+## 快速开始
+
+```bash
+# 1. 用 SysConfig GUI 配好芯片和引脚，保存 .syscfg 到空目录，然后：
+mspm0-init
+
+# 2. 构建
+cmake --build build -j$(nproc)
+
+# 3. 调试（VSCode）
+code .
+# 按 F5 → 选择 CMSIS-DAP 或 XDS110
+```
+
+修改配置后：
+
+```bash
+mspm0-init regenerate    # 仅更新生成文件，src/ 下手写代码安全无虞
+```
+
+---
+
+## 功能
 
 | 子命令 | 用途 |
 |--------|------|
-| `new` | 从 `.syscfg` 创建新项目（自动发现当前目录的配置文件） |
+| （无参数） | 自动发现当前目录 `.syscfg`，原地创建项目 |
+| `new` | 从 `.syscfg` 创建新项目 |
 | `regenerate` | 修改引脚/外设配置后重新生成代码，**不改动手写代码** |
 
 脚本自动完成：
@@ -30,32 +50,6 @@
 - 生成 `CMakeLists.txt`（arm-none-eabi-gcc 工具链）
 - 生成 `.vscode/` 三件套（`launch.json` / `tasks.json` / `c_cpp_properties.json`）
 - 自动 cmake configure + build 验证
-
----
-
-## 快速开始
-
-```bash
-# 1. 用 SysConfig GUI 配好芯片和引脚，保存为 .syscfg，然后：
-mspm0-init new -n my_blinky
-
-# 2. 构建
-cd my_blinky
-cmake --build build -j$(nproc)
-
-# 3. 调试（VSCode）
-code .
-# 按 F5 → 选择 CMSIS-DAP 或 XDS110
-```
-
-### 修改配置后
-
-```bash
-# 在 SysConfig GUI 中修改 .syscfg，保存，然后：
-cd my_blinky
-mspm0-init regenerate
-# → 仅更新生成文件，src/ 下手写代码安全无虞
-```
 
 ---
 
@@ -97,7 +91,7 @@ sudo apt install python3 gcc-arm-none-eabi cmake ninja-build
 
 ## 环境变量
 
-**全部可选**。如果不设置，脚本会自动在 TI 工具目录下搜索。
+**全部可选**。不设置时脚本会自动搜索 TI 工具目录。
 
 | 变量 | Linux 默认值 | Windows 默认值 | 说明 |
 |------|-------------|---------------|------|
@@ -131,7 +125,10 @@ $env:TI_ROOT = "C:\ti"
 ### 创建新项目
 
 ```bash
-# 自动发现当前目录的 .syscfg（最常用）
+# 最简单：在只有 .syscfg 的目录下直接运行
+mspm0-init
+
+# 自动发现当前目录的 .syscfg
 mspm0-init new -n my_project
 
 # 手动指定 syscfg 文件
@@ -239,3 +236,7 @@ ln -s $(pwd)/mspm0-init ~/bin/mspm0-init
 # 安装到 PATH（Windows）
 # 将 ti-project-assistant 目录加入系统 PATH
 ```
+
+## 许可证
+
+[MIT](LICENSE)
