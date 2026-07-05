@@ -441,6 +441,98 @@ def parse_device_opt(device_opt_path: str) -> str:
 
 
 # =============================================================================
+# Step 3c: Generate stub ti_msp_dl_config.c/h when SysConfig produces none
+# (blank .syscfg with no peripherals configured)
+# =============================================================================
+DL_CONFIG_H_STUB = """\
+/*
+ *  ============ ti_msp_dl_config.h =============
+ *  Minimal stub — no peripherals configured in SysConfig.
+ *  Re-run SysConfig after adding pins/peripherals to replace this file.
+ */
+
+#ifndef ti_msp_dl_config_h
+#define ti_msp_dl_config_h
+
+{config_defines}
+
+#if defined(__GNUC__)
+#define SYSCONFIG_WEAK __attribute__((weak))
+#elif defined(__IAR_SYSTEMS_ICC__)
+#define SYSCONFIG_WEAK __weak
+#elif defined(__ti_version__) || defined(__TI_COMPILER_VERSION__)
+#define SYSCONFIG_WEAK __attribute__((weak))
+#else
+#define SYSCONFIG_WEAK
+#endif
+
+#include <ti/devices/msp/msp.h>
+#include <ti/driverlib/driverlib.h>
+#include <ti/driverlib/m0p/dl_core.h>
+
+#ifdef __cplusplus
+extern "C" {{
+#endif
+
+#define CPUCLK_FREQ                                                    32000000
+
+void SYSCFG_DL_init(void);
+
+#ifdef __cplusplus
+}}
+#endif
+
+#endif /* ti_msp_dl_config_h */
+"""
+
+DL_CONFIG_C_STUB = """\
+/*
+ *  ============ ti_msp_dl_config.c =============
+ *  Minimal stub — no peripherals configured in SysConfig.
+ *  Re-run SysConfig after adding pins/peripherals to replace this file.
+ */
+
+#include "ti_msp_dl_config.h"
+
+SYSCONFIG_WEAK void SYSCFG_DL_init(void)
+{{
+    /* No peripherals configured yet.
+     * Add pins/peripherals in SysConfig and regenerate to populate. */
+}}
+"""
+
+
+def write_dl_config_stubs(out_dir: str, device: str, dry_run: bool = False):
+    """Generate minimal ti_msp_dl_config.c/h when SysConfig doesn't."""
+    h_path = os.path.join(out_dir, "ti_msp_dl_config.h")
+    c_path = os.path.join(out_dir, "ti_msp_dl_config.c")
+
+    if os.path.isfile(h_path) and os.path.isfile(c_path):
+        return  # Already exist, nothing to do
+
+    # Build CONFIG_* defines from device name
+    normalized = device.upper().rstrip("X")
+    config_defines = f"#define CONFIG_{normalized}X\n#define CONFIG_{normalized}"
+
+    if not os.path.isfile(h_path):
+        content_h = DL_CONFIG_H_STUB.format(config_defines=config_defines)
+        if dry_run:
+            info(f"[dry-run] Write stub ti_msp_dl_config.h")
+        else:
+            with open(h_path, "w") as f:
+                f.write(content_h)
+            info("  + ti_msp_dl_config.h (stub — no peripherals configured)")
+
+    if not os.path.isfile(c_path):
+        if dry_run:
+            info(f"[dry-run] Write stub ti_msp_dl_config.c")
+        else:
+            with open(c_path, "w") as f:
+                f.write(DL_CONFIG_C_STUB)
+            info("  + ti_msp_dl_config.c (stub — no peripherals configured)")
+
+
+# =============================================================================
 # Step 4: Chip mapping
 # =============================================================================
 def resolve_chip(device: str, sdk_dir: str) -> dict:
@@ -630,11 +722,6 @@ CMAKE_TEMPLATE = textwrap.dedent("""\
 MAIN_C_TEMPLATE = """\
 #include "ti_msp_dl_config.h"
 
-/**
- * @brief  Simple delay function (CPU cycle-based)
- * @param  ms  delay in milliseconds
- * @note   CPUCLK_FREQ = {cpu_freq_hz} Hz
- */
 static void delay_ms(uint32_t ms)
 {{
     delay_cycles(ms * (CPUCLK_FREQ / 1000));
@@ -642,25 +729,14 @@ static void delay_ms(uint32_t ms)
 
 int main(void)
 {{
-    /* Initialize system, GPIO and peripherals */
     SYSCFG_DL_init();
 
     while (1) {{
-{main_loop_body}
+        /* TODO: Add your application logic here */
+        delay_ms(1000);
     }}
 }}
 """
-
-MAIN_C_BLINK_BODY = """\
-            /* Toggle LED pin */
-            DL_GPIO_togglePins(GPIO_GRP_0_PORT, GPIO_GRP_0_LED0_PIN);
-
-            /* Delay 500ms */
-            delay_ms(500);"""
-
-MAIN_C_EMPTY_BODY = """\
-            /* TODO: Add your application logic here */
-            delay_ms(1000);"""
 
 
 # =============================================================================
@@ -837,26 +913,13 @@ def write_cmake_lists(project_dir: str, ctx: dict, dry_run: bool = False):
 
 def write_main_c(project_dir: str, ctx: dict, dry_run: bool = False):
     """Generate src/main.c."""
-    # Generate blink code when LED pin present, otherwise empty template
-    pin_groups = ctx.get("pin_groups", [])
-    has_led = any(
-        any("LED" in pin.get("name", "").upper() for pin in grp.get("pins", []))
-        for grp in pin_groups
-    )
-
-    body = MAIN_C_BLINK_BODY if has_led else MAIN_C_EMPTY_BODY
-    content = MAIN_C_TEMPLATE.format(
-        cpu_freq_hz=ctx["cpu_freq_hz"],
-        main_loop_body=body,
-    )
-
     dest = os.path.join(project_dir, "src", "main.c")
     if dry_run:
         info(f"[dry-run] Write src/main.c")
         return
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     with open(dest, "w") as f:
-        f.write(content)
+        f.write(MAIN_C_TEMPLATE)
     info("  ✓ src/main.c")
 
 
@@ -1016,6 +1079,10 @@ def copy_syscfg(syscfg_path: str, project_dir: str, dry_run: bool = False):
     if not syscfg_path or not os.path.isfile(syscfg_path):
         return
     dest = os.path.join(project_dir, os.path.basename(syscfg_path))
+    # Skip when source and dest are the same file (in-place project creation)
+    if os.path.abspath(syscfg_path) == os.path.abspath(dest):
+        info("  - syscfg already at project root, skipping copy")
+        return
     if dry_run:
         info(f"[dry-run] cp {syscfg_path} → {dest}")
         return
@@ -1102,11 +1169,20 @@ def cmd_new(args):
     project_dir = os.path.abspath(project_dir)
 
     if os.path.exists(project_dir) and os.listdir(project_dir):
-        warn(f"Target directory not empty: {project_dir}")
-        ans = input("  Continue? Existing files may be overwritten [y/N]: ")
-        if ans.lower() != "y":
-            info("Cancelled")
-            sys.exit(0)
+        # Skip warning when only .syscfg files and hidden artifacts exist
+        # (e.g. in-place init where the .syscfg IS the only content)
+        contents = os.listdir(project_dir)
+        ignorable = {f for f in contents
+                     if f.endswith(".syscfg") or f == ".sysconfig_backup"
+                     or f.startswith(".")}
+        if set(contents) - ignorable:
+            warn(f"Target directory not empty: {project_dir}")
+            ans = input("  Continue? Existing files may be overwritten [y/N]: ")
+            if ans.lower() != "y":
+                info("Cancelled")
+                sys.exit(0)
+        else:
+            info(f"Directory has only .syscfg — creating project in-place")
 
     if not device:
         error("Cannot determine chip model. Provide .syscfg or --device")
@@ -1131,6 +1207,10 @@ def cmd_new(args):
     else:
         info("--- Step 3: Skip (no syscfg) ---")
         os.makedirs(sysconfig_tmp, exist_ok=True)
+
+    # Ensure ti_msp_dl_config.c/h exist (generate stubs if SysConfig skipped them)
+    if not args.dry_run:
+        write_dl_config_stubs(sysconfig_tmp, device or args.device or "MSPM0G3507", args.dry_run)
 
     # -- Step 4: Parse generated headers --
     info("--- Step 4: Parse metadata ---")
@@ -1393,25 +1473,24 @@ def main():
 
         if has_cmake and has_syscfg:
             # Looks like an existing project — regenerate
-            info(f"Detected existing project with .syscfg — auto-regenerating")
+            info("Detected existing project — auto-regenerating")
             sys.argv = [sys.argv[0], "regenerate", str(cwd)]
             cmd_regenerate(parse_args())
         elif has_syscfg:
-            # Has config but no project yet — prompt for name and create
-            print(f"\nFound .syscfg: {has_syscfg[0].name}")
-            name = input("Project name: ").strip()
-            if name:
-                sys.argv = [sys.argv[0], "new", str(has_syscfg[0]), "-n", name]
-                cmd_new(parse_args())
-            else:
-                info("Cancelled")
+            # Clean dir with .syscfg — use its name as project name, init here
+            name = has_syscfg[0].stem
+            info(f"Auto-detected: {has_syscfg[0].name} → project '{name}'")
+            sys.argv = [sys.argv[0], "new", str(has_syscfg[0]), "-n", name, "-o", str(cwd)]
+            cmd_new(parse_args())
         else:
             print("\nUsage: mspm0-init <subcommand> [options]\n")
             print("Subcommands:")
             print("  new           Create a new MSPM0 project")
             print("  regenerate    Re-run SysConfig for an existing project")
-            print("\nTry: mspm0-init new -n my_project    (auto-discovers .syscfg)")
-            print("     mspm0-init regenerate            (inside a project dir)")
+            print("\nExamples:")
+            print("  mspm0-init                         (auto-detect in current dir)")
+            print("  mspm0-init new -n my_project       (auto-discovers .syscfg)")
+            print("  mspm0-init regenerate              (inside a project dir)")
             sys.exit(0)
 
 
