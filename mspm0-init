@@ -698,7 +698,7 @@ TASKS_JSON_TEMPLATE = """\
             "command": "cmake",
             "args": [
                 "-B", "build",
-                "-G", _CMAKE_GENERATOR,
+                "-G", "___CMAKE_GENERATOR___",
                 "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
                 "."
             ],
@@ -879,7 +879,7 @@ def write_tasks_json(project_dir: str, dry_run: bool = False):
         info(f"[dry-run] Write .vscode/tasks.json")
         return
     with open(dest, "w") as f:
-        f.write(TASKS_JSON_TEMPLATE)
+        f.write(TASKS_JSON_TEMPLATE.replace("___CMAKE_GENERATOR___", _CMAKE_GENERATOR))
     info("  ✓ .vscode/tasks.json")
 
 
