@@ -1,0 +1,1350 @@
+#!/usr/bin/env python3
+"""
+mspm0-init — TI MSPM0 one-click project init tool
+
+Starting from a SysConfig (.syscfg) graphical config file, automates:
+  1. Invoke SysConfig CLI to generate ti_msp_dl_config.c/h, linker scripts, etc.
+  2. Parse generated headers to extract chip model, pin definitions, clock freq
+  3. Auto-map SDK resources (startup file, driverlib, memory layout) from chip model
+  4. Create standard project directory structure
+  5. Generate CMakeLists.txt (arm-none-eabi-gcc toolchain)
+  6. Generate .vscode/ config files (launch.json / tasks.json / c_cpp_properties.json)
+  7. Optional: auto-run cmake configure + build to verify
+
+Usage:
+  mspm0-init myboard.syscfg -n blinky
+  mspm0-init myboard.syscfg -n uart_echo -d xds110 -o ~/projects/uart_echo
+  mspm0-init --device MSPM0G3507 --package "LQFP-48(PT)" -n bare_project  # no syscfg needed
+
+Dependencies:
+  - Python 3.8+
+  - arm-none-eabi-gcc (in PATH)
+  - TI SysConfig CLI (SYSconfig_DIR env var or default path)
+  - TI MSPM0 SDK   (MSPM0_SDK env var or default path)
+"""
+
+import argparse
+import os
+import re
+import sys
+import json
+import shutil
+import subprocess
+import textwrap
+from pathlib import Path
+from typing import Optional, Dict, List, Tuple
+
+# =============================================================================
+# Default paths (adjust to your installation)
+# =============================================================================
+
+def _discover_dir(base: str, pattern: str) -> Optional[str]:
+    """Scan <base> for directories matching <pattern>. Return first (sorted) match."""
+    if not os.path.isdir(base):
+        return None
+    candidates = sorted(
+        [d for d in os.listdir(base) if re.match(pattern, d)],
+        reverse=True,  # latest version first
+    )
+    return os.path.join(base, candidates[0]) if candidates else None
+
+
+def _resolve_sdk() -> str:
+    """Resolve MSPM0 SDK path: env var > auto-discover > hardcoded default."""
+    env = os.environ.get("MSPM0_SDK")
+    if env and os.path.isdir(os.path.join(env, ".metadata")):
+        return env
+    discovered = _discover_dir(os.path.expanduser("~/ti"), r"mspm0_sdk_\d+.*")
+    if discovered:
+        return discovered
+    return os.path.expanduser("~/ti/mspm0_sdk_2_10_00_04")
+
+
+def _resolve_sysconfig() -> str:
+    """Resolve SysConfig path: env var > auto-discover > hardcoded default."""
+    env = os.environ.get("SYSCONFIG_DIR")
+    if env and os.path.isfile(os.path.join(env, "sysconfig_cli.sh")):
+        return env
+    discovered = _discover_dir(os.path.expanduser("~/ti"), r"sysconfig_\d+.*")
+    if discovered:
+        return discovered
+    return os.path.expanduser("~/ti/sysconfig_1.27.1")
+
+
+DEFAULT_SDK_DIR = _resolve_sdk()
+DEFAULT_SYSCONFIG_DIR = _resolve_sysconfig()
+DEFAULT_OPENOCD_DIR = os.path.expanduser(
+    "~/.config/Texas Instruments/ti-embedded-debug/openocd/1.3.1.50"
+)
+DEFAULT_GDB_DIR = os.path.expanduser(
+    "~/.config/Texas Instruments/ti-embedded-debug/arm-none-eabi-gdb/14.2.rel1.1"
+)
+
+# =============================================================================
+# Chip mapping table — device_define -> hardware params + SDK resource paths
+# =============================================================================
+CHIP_MAP: Dict[str, dict] = {
+    "__MSPM0G3507__": {
+        "cpu": "cortex-m0plus",
+        "startup": "ti/devices/msp/m0p/startup_system_files/gcc/startup_mspm0g350x_gcc.c",
+        "driverlib": "ti/driverlib/lib/gcc/m0p/mspm0g1x0x_g3x0x/driverlib.a",
+        "flash_kb": 128,
+        "sram_kb": 32,
+        "flash_origin": "0x00000000",
+        "flash_length": "0x00020000",
+        "sram_origin": "0x20200000",
+        "sram_length": "0x00008000",
+        "package_options": ["LQFP-48(PT)", "LQFP-64(PM)", "VQFN-32(RHB)"],
+    },
+    "__MSPM0G3505__": {
+        "cpu": "cortex-m0plus",
+        "startup": "ti/devices/msp/m0p/startup_system_files/gcc/startup_mspm0g350x_gcc.c",
+        "driverlib": "ti/driverlib/lib/gcc/m0p/mspm0g1x0x_g3x0x/driverlib.a",
+        "flash_kb": 64,
+        "sram_kb": 16,
+        "flash_origin": "0x00000000",
+        "flash_length": "0x00010000",
+        "sram_origin": "0x20200000",
+        "sram_length": "0x00004000",
+        "package_options": [],
+    },
+    "__MSPM0L1306__": {
+        "cpu": "cortex-m0plus",
+        "startup": "ti/devices/msp/m0p/startup_system_files/gcc/startup_mspm0l130x_gcc.c",
+        "driverlib": "ti/driverlib/lib/gcc/m0p/mspm0l11xx_l13xx/driverlib.a",
+        "flash_kb": 64,
+        "sram_kb": 8,
+        "flash_origin": "0x00000000",
+        "flash_length": "0x00010000",
+        "sram_origin": "0x20200000",
+        "sram_length": "0x00002000",
+        "package_options": [],
+    },
+}
+
+# Debugger OpenOCD config mapping
+DEBUGGER_CONFIG = {
+    "cmsis-dap": {
+        "configFiles": ["interface/cmsis-dap.cfg", "target/ti_mspm0.cfg"],
+    },
+    "xds110": {
+        "configFiles": ["interface/xds110.cfg", "target/ti_mspm0.cfg"],
+    },
+}
+
+
+# =============================================================================
+# ANSI colors
+# =============================================================================
+class Color:
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    CYAN = "\033[96m"
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
+
+
+def info(msg: str):
+    print(f"{Color.BLUE}[INFO]{Color.RESET} {msg}")
+
+
+def success(msg: str):
+    print(f"{Color.GREEN}[OK]{Color.RESET}   {msg}")
+
+
+def warn(msg: str):
+    print(f"{Color.YELLOW}[WARN]{Color.RESET} {msg}")
+
+
+def error(msg: str):
+    print(f"{Color.RED}[ERROR]{Color.RESET} {msg}", file=sys.stderr)
+
+
+# =============================================================================
+# Step 1: Parse arguments
+# =============================================================================
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="TI MSPM0 one-click project init",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=textwrap.dedent("""\
+            Examples:
+              %(prog)s new -n blinky                  (auto-discovers .syscfg in current dir)
+              %(prog)s new myboard.syscfg -n uart_echo -d xds110
+              %(prog)s new --device MSPM0G3507 --package "LQFP-48(PT)" -n bare
+              %(prog)s regenerate                     (inside project dir)
+              %(prog)s regenerate /path/to/project
+        """),
+    )
+
+    sub = parser.add_subparsers(dest="command", help="Subcommands")
+
+    # ---- subcommand: new ----
+    p_new = sub.add_parser("new", help="Create a new MSPM0 project")
+    p_new.add_argument(
+        "syscfg",
+        nargs="?",
+        help="SysConfig project file (.syscfg). Auto-discovered from current dir if omitted.",
+    )
+    p_new.add_argument("-n", "--name", required=True, help="Project name (CMake project name)")
+    p_new.add_argument("-o", "--output", default=None, help="Output directory (default: ./<name>/)")
+    p_new.add_argument("-s", "--sdk", default=DEFAULT_SDK_DIR, help=f"MSPM0 SDK path (default: {DEFAULT_SDK_DIR})")
+    p_new.add_argument("--sysconfig", default=DEFAULT_SYSCONFIG_DIR, help=f"SysConfig install dir (default: {DEFAULT_SYSCONFIG_DIR})")
+    p_new.add_argument("-d", "--debugger", choices=["cmsis-dap", "xds110", "none"], default="cmsis-dap", help="Debugger type (default: cmsis-dap)")
+    p_new.add_argument("--device", default=None, help="Specify chip model manually (e.g. MSPM0G3507)")
+    p_new.add_argument("--package", default=None, help="Specify package manually (e.g. LQFP-48(PT))")
+    p_new.add_argument("--openocd", default=DEFAULT_OPENOCD_DIR, help=f"OpenOCD install dir")
+    p_new.add_argument("--gdb", default=DEFAULT_GDB_DIR, help=f"arm-none-eabi-gdb path")
+    p_new.add_argument("--dry-run", action="store_true", help="Show operations without creating files")
+    p_new.add_argument("--no-build", action="store_true", help="Skip final cmake configure + build")
+
+    # ---- subcommand: regenerate ----
+    p_regen = sub.add_parser("regenerate", help="Regenerate SysConfig files for an existing project")
+    p_regen.add_argument("project_dir", nargs="?", default=".", help="Project directory (default: current dir)")
+    p_regen.add_argument("-s", "--sdk", default=DEFAULT_SDK_DIR, help=f"MSPM0 SDK path")
+    p_regen.add_argument("--sysconfig", default=DEFAULT_SYSCONFIG_DIR, help=f"SysConfig install dir")
+    p_regen.add_argument("--no-build", action="store_true", help="Skip rebuild after regeneration")
+    p_regen.add_argument("--backup", action="store_true", default=True, help="Backup old generated files before overwriting (default: on)")
+    p_regen.add_argument("--no-backup", action="store_false", dest="backup", help="Don't backup old files")
+    p_regen.add_argument("--dry-run", action="store_true", help="Show operations without creating files")
+
+    # Backward compat: if no subcommand given, default to 'new'
+    # argparse will error without a subcommand; we handle this in main()
+    return parser.parse_args()
+
+
+# =============================================================================
+# Step 1b: Validate environment
+# =============================================================================
+def validate_environment(args: argparse.Namespace) -> bool:
+    """Check that all required tools are available."""
+    ok = True
+
+    # arm-none-eabi-gcc
+    gcc = shutil.which("arm-none-eabi-gcc")
+    if not gcc:
+        error("arm-none-eabi-gcc not found. Install: sudo apt install gcc-arm-none-eabi")
+        ok = False
+    else:
+        success(f"arm-none-eabi-gcc: {gcc}")
+
+    # arm-none-eabi-objcopy
+    objcopy = shutil.which("arm-none-eabi-objcopy")
+    if not objcopy:
+        error("arm-none-eabi-objcopy not found")
+        ok = False
+
+    # SysConfig CLI (Called via shell script, internally launches node)
+    sysconfig_cli = os.path.join(args.sysconfig, "sysconfig_cli.sh")
+    if not os.path.isfile(sysconfig_cli):
+        error(f"SysConfig CLI not found: {sysconfig_cli}")
+        error("Set SYSconfig_DIR env var or use --sysconfig to specify path")
+        ok = False
+    else:
+        args._sysconfig_cli = sysconfig_cli
+        success(f"SysConfig CLI: {sysconfig_cli}")
+
+    # SDK
+    product_json = os.path.join(args.sdk, ".metadata", "product.json")
+    if not os.path.isfile(product_json):
+        error(f"MSPM0 SDK not found (missing product.json): {args.sdk}")
+        error("Set MSPM0_SDK env var or use --sdk to specify path")
+        ok = False
+    else:
+        success(f"MSPM0 SDK: {args.sdk}")
+
+    # If syscfg file provided, verify it exists
+    if args.syscfg:
+        if not os.path.isfile(args.syscfg):
+            error(f"SysConfig file not found: {args.syscfg}")
+            ok = False
+    else:
+        # --device is required when no syscfg is provided
+        if not args.device:
+            error("Provide a .syscfg file or specify --device")
+            ok = False
+
+    return ok
+
+
+# =============================================================================
+# Step 2: Parse syscfg to extract device/package from @cliArgs
+# =============================================================================
+def parse_syscfg_metadata(syscfg_path: str) -> dict:
+    """Read @v2CliArgs and @cliArgs from .syscfg file."""
+    metadata = {"device": None, "package": None, "part": "Default"}
+    if not syscfg_path or not os.path.isfile(syscfg_path):
+        return metadata
+
+    with open(syscfg_path, "r") as f:
+        content = f.read()
+
+    # Prefer v2CliArgs: //@v2CliArgs --device "MSPM0G3507" --package "LQFP-48(PT)"
+    v2 = re.search(r"@v2CliArgs\s+(.*)", content)
+    if v2:
+        args_str = v2.group(1)
+    else:
+        cli = re.search(r"@cliArgs\s+(.*)", content)
+        if cli:
+            args_str = cli.group(1)
+        else:
+            return metadata
+
+    # Extract --device
+    dev = re.search(r'--device\s+"([^"]+)"', args_str)
+    if dev:
+        metadata["device"] = dev.group(1)
+
+    # Extract --package
+    pkg = re.search(r'--package\s+"([^"]+)"', args_str)
+    if pkg:
+        metadata["package"] = pkg.group(1)
+
+    # Extract --part
+    part = re.search(r'--part\s+"([^"]+)"', args_str)
+    if part:
+        metadata["part"] = part.group(1)
+
+    return metadata
+
+
+# =============================================================================
+# Step 2b: Invoke SysConfig CLI
+# =============================================================================
+def run_sysconfig(
+    syscfg_path: str,
+    out_dir: str,
+    device: str,
+    package: str,
+    sdk_dir: str,
+    sysconfig_cli: str,
+    dry_run: bool = False,
+) -> bool:
+    """Invoke SysConfig CLI to generate code files."""
+    product_json = os.path.join(sdk_dir, ".metadata", "product.json")
+
+    cmd = [
+        sysconfig_cli,
+        "--product", product_json,
+        "--device", device,
+        "--package", package,
+        "--script", syscfg_path,
+        "--output", out_dir,
+        "--compiler", "gcc",
+    ]
+
+    info(f"Execute: {' '.join(cmd)}")
+
+    if dry_run:
+        info("[dry-run] Skipping actual execution")
+        return True
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        error(f"SysConfig CLI failed:\n{result.stderr}\n{result.stdout}")
+        return False
+
+    success("SysConfig code generation complete")
+    generated = os.listdir(out_dir)
+    info(f"Generated files ({len(generated)}): {', '.join(generated)}")
+    return True
+
+
+# =============================================================================
+# Step 3: Parse ti_msp_dl_config.h for metadata
+# =============================================================================
+def parse_dl_config(dl_config_h: str) -> dict:
+    """Extract chip defines, pin configs, and clock info from generated ti_msp_dl_config.h."""
+    meta = {
+        "chip_defines": [],
+        "cpu_freq_hz": 32000000,
+        "pin_groups": [],
+    }
+
+    if not os.path.isfile(dl_config_h):
+        warn(f"NotFound: {dl_config_h}, using default metadata")
+        return meta
+
+    with open(dl_config_h, "r") as f:
+        content = f.read()
+
+    # #define CONFIG_MSPM0G350X / #define CONFIG_MSPM0G3507
+    meta["chip_defines"] = re.findall(r"#define\s+(CONFIG_\w+)", content)
+
+    # #define CPUCLK_FREQ  32000000
+    freq = re.search(r"#define\s+CPUCLK_FREQ\s+(\d+)", content)
+    if freq:
+        meta["cpu_freq_hz"] = int(freq.group(1))
+
+    # Pin groups: GPIO_GRP_0_PORT → GPIOA, GPIO_GRP_0_LED0_PIN → DL_GPIO_PIN_14
+    groups: Dict[str, dict] = {}
+    for m in re.finditer(r"#define\s+(\w+)_PORT\s+\((\w+)\)", content):
+        grp_name = m.group(1)  # e.g. GPIO_GRP_0
+        groups[grp_name] = {"name": grp_name, "port": m.group(2), "pins": []}
+
+    for m in re.finditer(r"#define\s+(\w+)_(\w+)_PIN\s+\((\w+)\)", content):
+        grp_name = m.group(1)       # e.g. GPIO_GRP_0
+        pin_name = m.group(2)       # e.g. LED0
+        pin_val  = m.group(3)       # e.g. DL_GPIO_PIN_14
+        if grp_name in groups:
+            groups[grp_name]["pins"].append({"name": pin_name, "define": pin_val})
+
+    for m in re.finditer(r"#define\s+(\w+)_(\w+)_IOMUX\s+\((\w+)\)", content):
+        grp_name = m.group(1)
+        pin_name = m.group(2)
+        iomux_val = m.group(3)
+        if grp_name in groups:
+            for pin in groups[grp_name]["pins"]:
+                if pin["name"] == pin_name:
+                    pin["iomux"] = iomux_val
+
+    meta["pin_groups"] = list(groups.values())
+    return meta
+
+
+# =============================================================================
+# Step 3b: Extract GCC define from device.opt
+# =============================================================================
+def parse_device_opt(device_opt_path: str) -> str:
+    """Extract -D macro defines from device.opt."""
+    if not os.path.isfile(device_opt_path):
+        return ""
+    with open(device_opt_path, "r") as f:
+        content = f.read()
+    defines = re.findall(r"-D(\w+)", content)
+    return defines[0] if defines else ""
+
+
+# =============================================================================
+# Step 4: Chip mapping
+# =============================================================================
+def resolve_chip(device: str, sdk_dir: str) -> dict:
+    """Look up chip in mapping table, return full parameters."""
+    # Normalize device name: MSPM0G350X / MSPM0G3507 -> __MSPM0G3507__
+    # Strip trailing X, wrap with __
+    normalized = device.upper().rstrip("X")
+    key = f"__{normalized}__"
+
+    if key in CHIP_MAP:
+        chip = CHIP_MAP[key].copy()
+        chip["device_define"] = key
+        chip["device_name"] = normalized
+        return chip
+
+    # Fuzzy match: try G350x-series fallback when exact key missing
+    # e.g. __MSPM0G3501__ -> fallback to G3507 config
+    for known_key, known_chip in CHIP_MAP.items():
+        # Extract series prefix: __MSPM0G3507__ -> MSPM0G350
+        base = re.sub(r"\d+__$", "", known_key)  # strip trailing digits
+        if key.startswith(base):
+            warn(f"Chip {device} has no exact mapping, reusing {known_key} config")
+            chip = known_chip.copy()
+            chip["device_define"] = key
+            chip["device_name"] = normalized
+            return chip
+
+    # Last resort: construct reasonable defaults
+    warn(f"Chip {device} not in known map, using generic Cortex-M0+ defaults")
+    return {
+        "cpu": "cortex-m0plus",
+        "startup": f"ti/devices/msp/m0p/startup_system_files/gcc/startup_{normalized.lower()}_gcc.c",
+        "driverlib": "ti/driverlib/lib/gcc/m0p/mspm0g1x0x_g3x0x/driverlib.a",
+        "flash_kb": 128,
+        "sram_kb": 32,
+        "flash_origin": "0x00000000",
+        "flash_length": "0x00020000",
+        "sram_origin": "0x20200000",
+        "sram_length": "0x00008000",
+        "device_define": key,
+        "device_name": normalized,
+    }
+
+
+# =============================================================================
+# Step 5: Create project directory structure
+# =============================================================================
+DIRS = [
+    "inc/driver",
+    "src/driver",
+    "lib",
+    "excluded",
+    ".vscode",
+    "build",
+]
+
+
+def create_directories(project_dir: str, dry_run: bool = False):
+    """Create standard project directory tree."""
+    for d in DIRS:
+        full = os.path.join(project_dir, d)
+        if dry_run:
+            info(f"[dry-run] mkdir -p {{full}}")
+        else:
+            os.makedirs(full, exist_ok=True)
+    success(f"Directory structure created ({len(DIRS)} subdirs)")
+
+
+# =============================================================================
+# Step 6: Distribute files
+# =============================================================================
+FILE_ROUTING = {
+    # SysConfig output -> project location
+    "ti_msp_dl_config.h":  "{project}",
+    "ti_msp_dl_config.c":  "{project}",
+    "device_linker.lds":   "{project}",
+    "device.opt":          "{project}",
+    "device_linker.cmd":   "{project}/excluded",
+    "device.cmd.genlibs":  "{project}/excluded",
+    "device.lds.genlibs":  "{project}/excluded",
+    "Event.dot":           "{project}/excluded",
+}
+
+
+def distribute_files(sysconfig_out: str, project_dir: str, dry_run: bool = False):
+    """Move SysConfig output files to their correct project locations."""
+    for filename, dest_rel in FILE_ROUTING.items():
+        src = os.path.join(sysconfig_out, filename)
+        dest_dir = dest_rel.format(project=project_dir)
+        dest = os.path.join(dest_dir, filename)
+
+        if not os.path.isfile(src):
+            continue
+
+        if dry_run:
+            info(f"[dry-run] cp {src} → {dest}")
+            continue
+
+        os.makedirs(dest_dir, exist_ok=True)
+        shutil.copy2(src, dest)
+        info(f"  ✓ {filename}")
+
+    # Also copy original syscfg to project root
+    # (handled in write_templates)
+
+    success("File distribution complete")
+
+
+# =============================================================================
+# Step 7: Template - CMakeLists.txt
+# =============================================================================
+CMAKE_TEMPLATE = textwrap.dedent("""\
+    cmake_minimum_required(VERSION 3.13)
+
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+    project({project_name} C ASM)
+
+    # ===== Toolchain =====
+    set(CMAKE_C_COMPILER   arm-none-eabi-gcc)
+    set(CMAKE_CXX_COMPILER arm-none-eabi-g++)
+    set(CMAKE_ASM_COMPILER arm-none-eabi-gcc)
+    set(CMAKE_OBJCOPY      arm-none-eabi-objcopy)
+    set(CMAKE_SIZE         arm-none-eabi-size)
+
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+    # ===== MSPM0 SDK path =====
+    set(SDK_DIR {sdk_dir}/source)
+    set(DL_LIB  ${{SDK_DIR}}/{driverlib_path})
+
+    # ===== Chip defines =====
+    set(MCU_FLAGS_STR "-mcpu={cpu} -mthumb")
+    separate_arguments(MCU_FLAGS UNIX_COMMAND ${{MCU_FLAGS_STR}})
+
+    set(DEFINES_STR "{defines_str}")
+    separate_arguments(DEFINES UNIX_COMMAND ${{DEFINES_STR}})
+
+    # ===== Compile options =====
+    add_compile_options(${{MCU_FLAGS}})
+    add_compile_options(-std=gnu11 -Wall -Wextra -g -O0)
+    add_compile_options(-ffunction-sections -fdata-sections)
+    foreach(d ${{DEFINES}})
+        add_compile_options(-D${{d}})
+    endforeach()
+
+    # ===== Link options =====
+    add_link_options(${{MCU_FLAGS}})
+    add_link_options(-T ${{CMAKE_SOURCE_DIR}}/device_linker.lds)
+    add_link_options(-Wl,-Map=${{PROJECT_BINARY_DIR}}/${{PROJECT_NAME}}.map,--cref)
+    add_link_options(-Wl,--gc-sections)
+    add_link_options(--specs=nosys.specs -nostartfiles)
+
+    # ===== Executable =====
+    add_executable(${{PROJECT_NAME}}
+        src/main.c
+        ti_msp_dl_config.c
+        ${{SDK_DIR}}/{startup_path}
+    )
+
+    # ===== Include paths =====
+    target_include_directories(${{PROJECT_NAME}} PRIVATE
+        ${{CMAKE_SOURCE_DIR}}
+        ${{CMAKE_SOURCE_DIR}}/inc
+        ${{CMAKE_SOURCE_DIR}}/inc/driver
+        ${{SDK_DIR}}
+        ${{SDK_DIR}}/third_party/CMSIS/Core/Include
+    )
+
+    # ===== Link driverlib =====
+    target_link_libraries(${{PROJECT_NAME}} PRIVATE ${{DL_LIB}})
+
+    # ===== Post-build: .hex (flash prog) + .bin (bootloader) + size =====
+    add_custom_command(TARGET ${{PROJECT_NAME}} POST_BUILD
+        COMMAND ${{CMAKE_OBJCOPY}} -O ihex $<TARGET_FILE:${{PROJECT_NAME}}>
+                ${{PROJECT_BINARY_DIR}}/${{PROJECT_NAME}}.hex
+        COMMAND ${{CMAKE_OBJCOPY}} -O binary $<TARGET_FILE:${{PROJECT_NAME}}>
+                ${{PROJECT_BINARY_DIR}}/${{PROJECT_NAME}}.bin
+        COMMAND ${{CMAKE_SIZE}} --format=berkeley $<TARGET_FILE:${{PROJECT_NAME}}>
+        COMMENT "Generating hex, bin and size info"
+    )""")
+
+
+# =============================================================================
+# Step 7b: Template - main.c
+# =============================================================================
+MAIN_C_TEMPLATE = """\
+#include "ti_msp_dl_config.h"
+
+/**
+ * @brief  Simple delay function (CPU cycle-based)
+ * @param  ms  delay in milliseconds
+ * @note   CPUCLK_FREQ = {cpu_freq_hz} Hz
+ */
+static void delay_ms(uint32_t ms)
+{{
+    delay_cycles(ms * (CPUCLK_FREQ / 1000));
+}}
+
+int main(void)
+{{
+    /* Initialize system, GPIO and peripherals */
+    SYSCFG_DL_init();
+
+    while (1) {{
+{main_loop_body}
+    }}
+}}
+"""
+
+MAIN_C_BLINK_BODY = """\
+            /* Toggle LED pin */
+            DL_GPIO_togglePins(GPIO_GRP_0_PORT, GPIO_GRP_0_LED0_PIN);
+
+            /* Delay 500ms */
+            delay_ms(500);"""
+
+MAIN_C_EMPTY_BODY = """\
+            /* TODO: Add your application logic here */
+            delay_ms(1000);"""
+
+
+# =============================================================================
+# Step 7c: Template - main.h
+# =============================================================================
+MAIN_H_TEMPLATE = textwrap.dedent("""\
+    /**
+     * @file    main.h
+     * @brief   {project_name} application header
+     */
+
+    #ifndef MAIN_H_
+    #define MAIN_H_
+
+    #include "ti_msp_dl_config.h"
+
+    /* Global macros */
+    #define APP_VERSION_MAJOR  0
+    #define APP_VERSION_MINOR  1
+
+    #endif /* MAIN_H_ */
+    """)
+
+
+# =============================================================================
+# Step 8: Template - .vscode/tasks.json
+# =============================================================================
+TASKS_JSON_TEMPLATE = """\
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake Configure",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "-B", "build",
+                "-G", "Unix Makefiles",
+                "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+                "."
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
+        },
+        {
+            "label": "Build MSPM0 project",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build", "build",
+                "-j", "4"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": [
+                "CMake Configure"
+            ]
+        },
+        {
+            "label": "Clean",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build", "build",
+                "--target", "clean"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        }
+    ]
+}"""
+
+
+# =============================================================================
+# Step 8b: Template - .vscode/launch.json
+# =============================================================================
+LAUNCH_JSON_TEMPLATE = """\
+{{
+    "version": "0.2.0",
+    "configurations": [
+        {{
+            "name": "{device_name} Debug ({debugger_label})",
+            "cwd": "${{workspaceFolder}}",
+            "executable": "${{workspaceFolder}}/build/{project_name}",
+            "request": "launch",
+            "type": "cortex-debug",
+            "runToEntryPoint": "main",
+            "servertype": "openocd",
+            "configFiles": [
+                {config_files}
+            ],
+            "openOCDPreConfigLaunchCommands": [
+                "set WORKAREASIZE 0x2000"
+            ],
+            "searchDir": [
+                "{openocd_scripts}"
+            ],
+            "serverpath": "{openocd_bin}",
+            "armToolchainPath": "{gdb_dir}"
+        }}
+    ]
+}}"""
+
+
+# =============================================================================
+# Step 8c: Template - .vscode/c_cpp_properties.json
+# =============================================================================
+CPP_PROPERTIES_TEMPLATE = """\
+{{
+    "configurations": [
+        {{
+            "name": "{device_name} ARM GCC",
+            "compilerPath": "/usr/bin/arm-none-eabi-gcc",
+            "compilerArgs": [
+                "-mcpu={cpu}",
+                "-mthumb",
+                "-std=gnu11"
+            ],
+            "includePath": [
+                "${{workspaceFolder}}/**",
+                "{sdk_dir}/source",
+                "{sdk_dir}/source/third_party/CMSIS/Core/Include"
+            ],
+            "defines": [
+                {defines_json}
+            ],
+            "intelliSenseMode": "linux-gcc-arm",
+            "cStandard": "gnu11",
+            "cppStandard": "gnu++14"
+        }}
+    ],
+    "version": 4
+}}"""
+
+
+# =============================================================================
+# Template generation functions
+# =============================================================================
+def write_cmake_lists(project_dir: str, ctx: dict, dry_run: bool = False):
+    """Generate CMakeLists.txt."""
+    # Build complete compile-time defines:
+    #   __MSPM0G3507__     — device identifier (required by SDK headers)
+    #   __USE_SYSCONFIG__  — SysConfig compatibility marker
+    #   CONFIG_MSPM0G350X / CONFIG_MSPM0G3507 — skip: already #define'd in ti_msp_dl_config.h
+    defines = [ctx["device_define"], "__USE_SYSCONFIG__"]
+    content = CMAKE_TEMPLATE.format(
+        project_name=ctx["project_name"],
+        sdk_dir=ctx["sdk_dir"],
+        cpu=ctx["cpu"],
+        defines_str=" ".join(defines),
+        driverlib_path=ctx["driverlib"],
+        startup_path=ctx["startup"],
+    )
+
+    dest = os.path.join(project_dir, "CMakeLists.txt")
+    if dry_run:
+        info(f"[dry-run] Write CMakeLists.txt ({len(content)} bytes)")
+        return
+    with open(dest, "w") as f:
+        f.write(content)
+    info("  ✓ CMakeLists.txt")
+
+
+def write_main_c(project_dir: str, ctx: dict, dry_run: bool = False):
+    """Generate src/main.c."""
+    # Generate blink code when LED pin present, otherwise empty template
+    pin_groups = ctx.get("pin_groups", [])
+    has_led = any(
+        any("LED" in pin.get("name", "").upper() for pin in grp.get("pins", []))
+        for grp in pin_groups
+    )
+
+    body = MAIN_C_BLINK_BODY if has_led else MAIN_C_EMPTY_BODY
+    content = MAIN_C_TEMPLATE.format(
+        cpu_freq_hz=ctx["cpu_freq_hz"],
+        main_loop_body=body,
+    )
+
+    dest = os.path.join(project_dir, "src", "main.c")
+    if dry_run:
+        info(f"[dry-run] Write src/main.c")
+        return
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "w") as f:
+        f.write(content)
+    info("  ✓ src/main.c")
+
+
+def write_main_h(project_dir: str, ctx: dict, dry_run: bool = False):
+    """Generate inc/main.h."""
+    content = MAIN_H_TEMPLATE.format(project_name=ctx["project_name"])
+    dest = os.path.join(project_dir, "inc", "main.h")
+    if dry_run:
+        info(f"[dry-run] Write inc/main.h")
+        return
+    with open(dest, "w") as f:
+        f.write(content)
+    info("  ✓ inc/main.h")
+
+
+def write_tasks_json(project_dir: str, dry_run: bool = False):
+    """Generate .vscode/tasks.json."""
+    dest = os.path.join(project_dir, ".vscode", "tasks.json")
+    if dry_run:
+        info(f"[dry-run] Write .vscode/tasks.json")
+        return
+    with open(dest, "w") as f:
+        f.write(TASKS_JSON_TEMPLATE)
+    info("  ✓ .vscode/tasks.json")
+
+
+def write_launch_json(project_dir: str, ctx: dict, dry_run: bool = False):
+    """Generate .vscode/launch.json."""
+    debugger = ctx["debugger"]
+    if debugger == "none":
+        info("  - Skip launch.json (debugger=none)")
+        return
+
+    dbg_cfg = DEBUGGER_CONFIG[debugger]
+    config_files = ",\n                ".join(
+        f'"{f}"' for f in dbg_cfg["configFiles"]
+    )
+    debugger_label = "CMSIS-DAP" if debugger == "cmsis-dap" else "XDS110"
+
+    content = LAUNCH_JSON_TEMPLATE.format(
+        device_name=ctx["device_name"],
+        debugger_label=debugger_label,
+        project_name=ctx["project_name"],
+        config_files=config_files,
+        openocd_scripts=os.path.join(ctx["openocd_dir"], "share", "openocd", "scripts"),
+        openocd_bin=os.path.join(ctx["openocd_dir"], "bin", "openocd"),
+        gdb_dir=ctx["gdb_dir"],
+    )
+
+    dest = os.path.join(project_dir, ".vscode", "launch.json")
+    if dry_run:
+        info(f"[dry-run] Write .vscode/launch.json")
+        return
+    with open(dest, "w") as f:
+        f.write(content)
+    info("  ✓ .vscode/launch.json")
+
+
+def write_cpp_properties(project_dir: str, ctx: dict, dry_run: bool = False):
+    """Generate .vscode/c_cpp_properties.json."""
+    defines = [ctx["device_define"], "__USE_SYSCONFIG__"]
+    defines_json = ",\n                ".join(f'"{d}"' for d in defines)
+
+    content = CPP_PROPERTIES_TEMPLATE.format(
+        device_name=ctx["device_name"],
+        cpu=ctx["cpu"],
+        sdk_dir=ctx["sdk_dir"],
+        defines_json=defines_json,
+    )
+
+    dest = os.path.join(project_dir, ".vscode", "c_cpp_properties.json")
+    if dry_run:
+        info(f"[dry-run] Write .vscode/c_cpp_properties.json")
+        return
+    with open(dest, "w") as f:
+        f.write(content)
+    info("  ✓ .vscode/c_cpp_properties.json")
+
+
+# =============================================================================
+# Step 9: CMake configure + build
+# =============================================================================
+def run_cmake_build(project_dir: str, dry_run: bool = False) -> bool:
+    """Run cmake configure + build."""
+    build_dir = os.path.join(project_dir, "build")
+
+    # Configure
+    configure_cmd = [
+        "cmake", "-B", build_dir,
+        "-G", "Unix Makefiles",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        ".",
+    ]
+    info(f"cmake configure: {' '.join(configure_cmd)}")
+
+    if dry_run:
+        info("[dry-run] Skip cmake configure")
+        return True
+
+    result = subprocess.run(
+        configure_cmd,
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        error(f"cmake configure failed:\n{result.stderr}\n{result.stdout}")
+        return False
+    success("cmake configure succeeded")
+
+    # Build
+    import multiprocessing
+    jobs = multiprocessing.cpu_count()
+    build_cmd = ["cmake", "--build", build_dir, "-j", str(jobs)]
+    info(f"cmake build: {' '.join(build_cmd)}")
+
+    result = subprocess.run(
+        build_cmd,
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        error(f"cmake build failed:\n{result.stderr}")
+        # Show last few lines of stdout
+        stdout_lines = result.stdout.strip().split("\n")
+        for line in stdout_lines[-10:]:
+            error(f"  {line}")
+        return False
+    success("cmake build succeeded")
+    return True
+
+
+# =============================================================================
+# Helper: copy syscfg to project dir
+# =============================================================================
+def copy_syscfg(syscfg_path: str, project_dir: str, dry_run: bool = False):
+    """Copy user's original .syscfg to project root."""
+    if not syscfg_path or not os.path.isfile(syscfg_path):
+        return
+    dest = os.path.join(project_dir, os.path.basename(syscfg_path))
+    if dry_run:
+        info(f"[dry-run] cp {syscfg_path} → {dest}")
+        return
+    shutil.copy2(syscfg_path, dest)
+    info("  \u2713 syscfg copied")
+
+
+# =============================================================================
+# Print project summary
+# =============================================================================
+def print_summary(ctx: dict):
+    """Print project creation summary."""
+    pin_groups = ctx.get("pin_groups", [])
+    pin_summary = ""
+    for grp in pin_groups:
+        pins = ", ".join(f"{p['name']}({p.get('iomux', p['define'])})" for p in grp["pins"])
+        pin_summary += f"\n          {grp['name']} @ {grp['port']}: [{pins}]"
+
+    print(f"""
+{Color.BOLD}{Color.GREEN}╔══════════════════════════════════════════════════╗
+║   MSPM0 project "{ctx['project_name']}" ready   ║
+╚══════════════════════════════════════════════════╝{Color.RESET}
+
+  📁 Path:      {ctx['project_dir']}
+  🔧 Chip:      {ctx['device_name']} ({ctx['cpu'].upper()} @ {ctx['cpu_freq_hz']//1_000_000}MHz)
+  📦 Flash:    {ctx['flash_kb']}KB / SRAM: {ctx['sram_kb']}KB
+  🐞 Debugger:   {ctx['debugger'].upper()}{pin_summary}
+
+  Build:
+    cd {ctx['project_dir']}
+    cmake -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .
+    cmake --build build -j$(nproc)
+
+  Flash (OpenOCD):
+    openocd -f interface/{ctx['debugger']}.cfg -f target/ti_mspm0.cfg \\
+      -c "program build/{ctx['project_name']}.elf verify reset exit"
+""")
+
+
+# =============================================================================
+# cmd_new() — Create a new project
+# =============================================================================
+def cmd_new(args):
+    print(f"\n{Color.BOLD}{Color.CYAN}╔════════════════════════════════════╗")
+    print(f"║   MSPM0 Project Init v0.1.0       ║")
+    print(f"╚════════════════════════════════════╝{Color.RESET}\n")
+
+    # ── Step 1: Auto-discover syscfg if not provided ──
+    info("--- Step 1: Locate configuration ---")
+    device = args.device
+    package = args.package
+
+    if not args.syscfg:
+        cwd_syscfg = sorted(Path(os.getcwd()).glob("*.syscfg"))
+        if len(cwd_syscfg) == 1:
+            args.syscfg = str(cwd_syscfg[0])
+            info(f"Auto-discovered: {os.path.basename(args.syscfg)}")
+        elif len(cwd_syscfg) > 1:
+            warn(f"Multiple .syscfg files found in current directory:")
+            for i, f in enumerate(cwd_syscfg, 1):
+                print(f"    {i}. {f.name}")
+            choice = input("  Select number (or Enter to skip): ").strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(cwd_syscfg):
+                args.syscfg = str(cwd_syscfg[int(choice) - 1])
+                info(f"Using: {os.path.basename(args.syscfg)}")
+            else:
+                warn("No selection made, proceeding without syscfg")
+        else:
+            info("No .syscfg found in current directory (use --device for manual setup)")
+
+    if args.syscfg:
+        meta = parse_syscfg_metadata(args.syscfg)
+        device = device or meta["device"]
+        package = package or meta["package"]
+        info(f"Device: {device}, Package: {package}")
+
+    # ── Step 2: Validate environment ──
+    info("--- Step 2: Validate environment ---")
+    if not validate_environment(args):
+        sys.exit(1)
+
+    # ── Determine output directory ──
+    project_dir = args.output or os.path.join(os.getcwd(), args.name)
+    project_dir = os.path.abspath(project_dir)
+
+    if os.path.exists(project_dir) and os.listdir(project_dir):
+        warn(f"Target directory not empty: {project_dir}")
+        ans = input("  Continue? Existing files may be overwritten [y/N]: ")
+        if ans.lower() != "y":
+            info("Cancelled")
+            sys.exit(0)
+
+    if not device:
+        error("Cannot determine chip model. Provide .syscfg or --device")
+        sys.exit(1)
+    if not package:
+        chip_tmp = resolve_chip(device, args.sdk)
+        pkgs = chip_tmp.get("package_options", [])
+        package = pkgs[0] if pkgs else "Default"
+        warn(f"No package specified, using default: {package}")
+
+    # ── Step 3: Invoke SysConfig CLI ──
+    sysconfig_tmp = os.path.join(project_dir, ".sysconfig_tmp")
+    if args.syscfg:
+        info("--- Step 3: SysConfig CLI code generation ---")
+        if not run_sysconfig(
+            args.syscfg, sysconfig_tmp,
+            device, package,
+            args.sdk, args._sysconfig_cli,
+            args.dry_run,
+        ):
+            sys.exit(1)
+    else:
+        info("--- Step 3: Skip (no syscfg) ---")
+        os.makedirs(sysconfig_tmp, exist_ok=True)
+
+    # -- Step 4: Parse generated headers --
+    info("--- Step 4: Parse metadata ---")
+    dl_config_h = os.path.join(sysconfig_tmp, "ti_msp_dl_config.h")
+    dl_meta = parse_dl_config(dl_config_h)
+
+    chip = resolve_chip(device, args.sdk)
+    info(f"Chip: {chip['device_name']}, CPU: {chip['cpu']}, "
+         f"Flash: {chip['flash_kb']}KB, SRAM: {chip['sram_kb']}KB")
+    if dl_meta["pin_groups"]:
+        info(f"Pin groups: {len(dl_meta['pin_groups'])}, "
+             f"CPU frequency: {dl_meta['cpu_freq_hz']}Hz")
+
+    # ── Build context ──
+    ctx = _build_ctx(args, project_dir, chip, dl_meta)
+
+    # -- Step 5: Create directories --
+    info("--- Step 5: Create directory structure ---")
+    create_directories(project_dir, args.dry_run)
+
+    # -- Step 6: Distribute files --
+    info("--- Step 6: Distribute generated files ---")
+    distribute_files(sysconfig_tmp, project_dir, args.dry_run)
+    copy_syscfg(args.syscfg, project_dir, args.dry_run)
+
+    # -- Step 7: Write templates --
+    info("--- Step 7: Generate code templates ---")
+    write_cmake_lists(project_dir, ctx, args.dry_run)
+    write_main_c(project_dir, ctx, args.dry_run)
+    write_main_h(project_dir, ctx, args.dry_run)
+
+    # -- Step 8: Write .vscode configs --
+    info("--- Step 8: Generate VSCode configs ---")
+    write_tasks_json(project_dir, args.dry_run)
+    write_launch_json(project_dir, ctx, args.dry_run)
+    write_cpp_properties(project_dir, ctx, args.dry_run)
+
+    # ── Clean up temp directory ──
+    if not args.dry_run and os.path.isdir(sysconfig_tmp):
+        shutil.rmtree(sysconfig_tmp)
+
+    # ── Step 9: cmake build ──
+    if not args.dry_run and not args.no_build and args.syscfg:
+        info("--- Step 9: CMake build verification ---")
+        run_cmake_build(project_dir, args.dry_run)
+    elif args.dry_run:
+        info("--- Step 9: [dry-run] Skip build ---")
+
+    # -- Summary --
+    print_summary(ctx)
+
+
+# =============================================================================
+# cmd_regenerate() — Re-run SysConfig for an existing project
+# =============================================================================
+def cmd_regenerate(args):
+    project_dir = os.path.abspath(args.project_dir)
+
+    print(f"\n{Color.BOLD}{Color.CYAN}╔════════════════════════════════════╗")
+    print(f"║   MSPM0 Regenerate SysConfig       ║")
+    print(f"╚════════════════════════════════════╝{Color.RESET}\n")
+
+    # ---- Validate project directory ----
+    if not os.path.isdir(project_dir):
+        error(f"Project directory not found: {project_dir}")
+        sys.exit(1)
+
+    # Find .syscfg file
+    syscfg_files = sorted(Path(project_dir).glob("*.syscfg"))
+    if not syscfg_files:
+        error(f"No .syscfg file found in {project_dir}")
+        error("Run 'mspm0-init new' to create a project first, or place a .syscfg file in the project root")
+        sys.exit(1)
+
+    syscfg_path = str(syscfg_files[0])
+    if len(syscfg_files) > 1:
+        warn(f"Multiple .syscfg files found, using: {os.path.basename(syscfg_path)}")
+
+    info(f"Project:  {project_dir}")
+    info(f"SysConfig: {syscfg_path}")
+
+    # ---- Validate env ----
+    info("--- Validate environment ---")
+    sysconfig_cli = os.path.join(args.sysconfig, "sysconfig_cli.sh")
+    if not os.path.isfile(sysconfig_cli):
+        error(f"SysConfig CLI not found: {sysconfig_cli}")
+        sys.exit(1)
+
+    product_json = os.path.join(args.sdk, ".metadata", "product.json")
+    if not os.path.isfile(product_json):
+        error(f"MSPM0 SDK not found: {args.sdk}")
+        sys.exit(1)
+
+    success("Environment OK")
+
+    # ---- Parse syscfg for device/package ----
+    meta = parse_syscfg_metadata(syscfg_path)
+    device = meta["device"]
+    package = meta["package"]
+    if not device:
+        error("Cannot determine device from .syscfg. The file may be incomplete.")
+        sys.exit(1)
+    info(f"Device: {device}, Package: {package}")
+
+    # ---- Backup existing generated files ----
+    GENERATED_FILES = [
+        "ti_msp_dl_config.h",
+        "ti_msp_dl_config.c",
+        "device_linker.lds",
+        "device.opt",
+    ]
+
+    if args.backup and not args.dry_run:
+        backup_dir = os.path.join(project_dir, ".sysconfig_backup")
+        os.makedirs(backup_dir, exist_ok=True)
+        for f in GENERATED_FILES:
+            src = os.path.join(project_dir, f)
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(backup_dir, f))
+        info(f"Backed up to {backup_dir}/")
+
+    # ---- Run SysConfig CLI ----
+    info("--- SysConfig CLI ---")
+    tmp_out = os.path.join(project_dir, ".sysconfig_tmp")
+    if not args.dry_run and os.path.isdir(tmp_out):
+        shutil.rmtree(tmp_out)
+
+    if not run_sysconfig(
+        syscfg_path, tmp_out,
+        device, package or "Default",
+        args.sdk, sysconfig_cli,
+        args.dry_run,
+    ):
+        error("SysConfig CLI failed. Old files have NOT been modified.")
+        if args.backup:
+            info(f"Restore from backup: {os.path.join(project_dir, '.sysconfig_backup')}")
+        sys.exit(1)
+
+    # ---- Copy new files into project ----
+    info("--- Updating project files ---")
+    updated = []
+    for f in GENERATED_FILES:
+        src = os.path.join(tmp_out, f)
+        dst = os.path.join(project_dir, f)
+        if os.path.isfile(src):
+            if args.dry_run:
+                info(f"  [dry-run] {f} -> {dst}")
+            else:
+                shutil.copy2(src, dst)
+            updated.append(f)
+
+    # Also update excluded files
+    EXCLUDED_FILES = ["device_linker.cmd", "device.cmd.genlibs", "device.lds.genlibs", "Event.dot"]
+    for f in EXCLUDED_FILES:
+        src = os.path.join(tmp_out, "excluded", f)
+        dst_dir = os.path.join(project_dir, "excluded")
+        dst = os.path.join(dst_dir, f)
+        if os.path.isfile(src):
+            if args.dry_run:
+                info(f"  [dry-run] excluded/{f}")
+            else:
+                os.makedirs(dst_dir, exist_ok=True)
+                shutil.copy2(src, dst)
+                updated.append(f"excluded/{f}")
+
+    # Clean tmp
+    if not args.dry_run and os.path.isdir(tmp_out):
+        shutil.rmtree(tmp_out)
+
+    success(f"Updated {len(updated)} file(s): {', '.join(updated)}")
+
+    # ---- Parse new metadata ----
+    dl_config_h = os.path.join(project_dir, "ti_msp_dl_config.h")
+    dl_meta = parse_dl_config(dl_config_h)
+    chip = resolve_chip(device, args.sdk)
+
+    if dl_meta["pin_groups"]:
+        info(f"Pin groups: {len(dl_meta['pin_groups'])}, CPU: {dl_meta['cpu_freq_hz']}Hz")
+        for grp in dl_meta["pin_groups"]:
+            pins = ", ".join(p["name"] for p in grp["pins"])
+            info(f"  {grp['name']} @ {grp['port']}: [{pins}]")
+
+    # ---- Rebuild ----
+    if not args.dry_run and not args.no_build:
+        info("--- Rebuilding ---")
+        build_dir = os.path.join(project_dir, "build")
+        if os.path.isfile(os.path.join(build_dir, "CMakeCache.txt")):
+            # Already configured, just build
+            import multiprocessing
+            jobs = multiprocessing.cpu_count()
+            result = subprocess.run(
+                ["cmake", "--build", build_dir, "-j", str(jobs)],
+                cwd=project_dir,
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                success("Rebuild succeeded")
+            else:
+                warn("Rebuild had errors (you may need to re-run cmake configure)")
+        else:
+            info("No CMakeCache.txt found, running cmake configure + build")
+            run_cmake_build(project_dir, args.dry_run)
+
+    print(f"""
+{Color.BOLD}{Color.GREEN}  Regeneration complete.{Color.RESET}
+  Project: {project_dir}
+  Chip:    {chip.get('device_name', device)}
+""")
+
+
+# =============================================================================
+# _build_ctx() — shared context builder
+# =============================================================================
+def _build_ctx(args, project_dir, chip, dl_meta):
+    return {
+        "project_name": args.name,
+        "project_dir": project_dir,
+        "sdk_dir": args.sdk,
+        "sysconfig_dir": args.sysconfig,
+        "debugger": args.debugger,
+        "openocd_dir": args.openocd,
+        "gdb_dir": args.gdb,
+        "cpu": chip["cpu"],
+        "startup": chip["startup"],
+        "driverlib": chip["driverlib"],
+        "flash_kb": chip["flash_kb"],
+        "sram_kb": chip["sram_kb"],
+        "device_name": chip["device_name"],
+        "device_define": chip["device_define"],
+        "chip_defines": dl_meta["chip_defines"],
+        "cpu_freq_hz": dl_meta["cpu_freq_hz"],
+        "pin_groups": dl_meta["pin_groups"],
+    }
+
+
+# =============================================================================
+# main() — dispatch
+# =============================================================================
+def main():
+    # Backward compat: if first arg is not a subcommand, insert 'new'
+    _args = sys.argv[1:]
+    if _args and _args[0] not in ("new", "regenerate", "-h", "--help"):
+        # Check if it looks like a path or is an option flag
+        if not _args[0].startswith("-"):
+            sys.argv.insert(1, "new")
+        elif "-n" in _args or "--name" in _args:
+            sys.argv.insert(1, "new")
+
+    args = parse_args()
+
+    if args.command == "regenerate":
+        cmd_regenerate(args)
+    else:
+        cmd_new(args)
+
+
+if __name__ == "__main__":
+    main()
