@@ -76,6 +76,32 @@ def _discover_dir(base: str, pattern: str) -> Optional[str]:
     return os.path.join(base, candidates[0]) if candidates else None
 
 
+def _discover_file(base: str, filename: str) -> Optional[str]:
+    """Scan <base> recursively for a file named <filename>. Return the first match."""
+    if not base or not os.path.isdir(base):
+        return None
+    for root, _, files in os.walk(base):
+        if filename in files:
+            return os.path.join(root, filename)
+    return None
+
+
+def _tool_cache_roots() -> List[str]:
+    """Return TI debug cache roots that should be searched before other locations."""
+    home = Path.home()
+    roots: List[str] = []
+
+    if IS_WIN:
+        roots.extend([
+            str(home / "AppData" / "Local" / "Texas Instruments" / "ti-embedded-debug"),
+            str(home / ".AppData" / "Local" / "Texas Instruments" / "ti-embedded-debug"),
+        ])
+    else:
+        roots.append(str(home / ".config" / "Texas Instruments" / "ti-embedded-debug"))
+
+    return roots
+
+
 def _resolve_sdk() -> str:
     """Resolve MSPM0 SDK path: env var > auto-discover > hardcoded default."""
     env = os.environ.get("MSPM0_SDK")
@@ -112,13 +138,117 @@ def _read_text_file(path: str) -> str:
 
 DEFAULT_SDK_DIR = _resolve_sdk()
 DEFAULT_SYSCONFIG_DIR = _resolve_sysconfig()
-DEFAULT_OPENOCD_DIR = os.environ.get("OPENOCD_DIR", _OPENOCD_FALLBACK)
-DEFAULT_GDB_DIR = os.environ.get("GDB_DIR", _GDB_FALLBACK)
+
+
+def _candidate_tool_path(path: Optional[str], executable_name: str) -> Optional[str]:
+    """Resolve a user-supplied tool path that may point at a file or directory."""
+    if not path:
+        return None
+
+    candidate = Path(path)
+    if candidate.is_file():
+        return str(candidate)
+    if candidate.is_dir():
+        nested = candidate / executable_name
+        if nested.is_file():
+            return str(nested)
+    return None
+
+
+def _resolve_openocd_exe(preferred: Optional[str] = None) -> str:
+    """Resolve OpenOCD executable path, preferring the TI cache root first."""
+    executable_name = "openocd.exe" if IS_WIN else "openocd"
+
+    manual = _candidate_tool_path(preferred, executable_name)
+    if manual:
+        return manual
+
+    for root in _tool_cache_roots():
+        discovered = _discover_file(root, executable_name)
+        if discovered:
+            return discovered
+
+    env_path = _candidate_tool_path(os.environ.get("OPENOCD_DIR"), executable_name)
+    if env_path:
+        return env_path
+
+    path_exe = shutil.which(executable_name)
+    if path_exe:
+        return path_exe
+
+    for root in filter(None, [os.environ.get("TI_ROOT"), os.environ.get("CCS_BASE"), Path.cwd().anchor]):
+        discovered = _discover_file(root, executable_name)
+        if discovered:
+            return discovered
+
+    return executable_name
+
+
+def _resolve_gdb_exe(preferred: Optional[str] = None) -> str:
+    """Resolve arm-none-eabi-gdb executable path, preferring the TI cache root first."""
+    executable_name = "arm-none-eabi-gdb.exe" if IS_WIN else "arm-none-eabi-gdb"
+
+    manual = _candidate_tool_path(preferred, executable_name)
+    if manual:
+        return manual
+
+    for root in _tool_cache_roots():
+        discovered = _discover_file(root, executable_name)
+        if discovered:
+            return discovered
+
+    env_path = _candidate_tool_path(os.environ.get("GDB_DIR"), executable_name)
+    if env_path:
+        return env_path
+
+    path_exe = shutil.which(executable_name)
+    if path_exe:
+        return path_exe
+
+    for root in filter(None, [os.environ.get("TI_ROOT"), os.environ.get("CCS_BASE"), Path.cwd().anchor]):
+        discovered = _discover_file(root, executable_name)
+        if discovered:
+            return discovered
+
+    return executable_name
+
+
+DEFAULT_OPENOCD_EXE = _resolve_openocd_exe()
+DEFAULT_GDB_EXE = _resolve_gdb_exe()
 
 
 def _posix_path(path: str) -> str:
     """Normalize a filesystem path for CMake/JSON by using forward slashes."""
     return str(Path(path)).replace("\\", "/")
+
+
+def _toolchain_dir(path: str) -> str:
+    """Return the directory that contains a tool executable or toolchain root."""
+    if not path:
+        return path
+    normalized = Path(path)
+    if normalized.is_file() or normalized.suffix.lower() == ".exe":
+        return str(normalized.parent)
+    return str(normalized)
+
+
+def _resolve_openocd_scripts(openocd_exe: str) -> str:
+    """Derive the OpenOCD scripts directory from the executable location."""
+    if not openocd_exe:
+        return ""
+
+    exe_path = Path(openocd_exe)
+    if exe_path.is_file() or exe_path.suffix.lower() == ".exe":
+        base_dir = exe_path.parent.parent
+        candidates = [
+            base_dir / "openocd" / "scripts",
+            base_dir / "share" / "openocd" / "scripts",
+            exe_path.parent / ".." / "scripts",
+        ]
+        for candidate in candidates:
+            if candidate.is_dir():
+                return str(candidate)
+    return ""
     
 def _cmake_cached_generator(build_dir: str) -> Optional[str]:
     """Read the generator recorded in an existing CMakeCache.txt, if any."""
@@ -252,8 +382,20 @@ def parse_args() -> argparse.Namespace:
     p_new.add_argument("-d", "--debugger", choices=["cmsis-dap", "xds110", "none"], default="cmsis-dap", help="Debugger type (default: cmsis-dap)")
     p_new.add_argument("--device", default=None, help="Specify chip model manually (e.g. MSPM0G3507)")
     p_new.add_argument("--package", default=None, help="Specify package manually (e.g. LQFP-48(PT))")
-    p_new.add_argument("--openocd", default=DEFAULT_OPENOCD_DIR, help=f"OpenOCD install dir")
-    p_new.add_argument("--gdb", default=DEFAULT_GDB_DIR, help=f"arm-none-eabi-gdb path")
+    p_new.add_argument(
+        "--openocd",
+        "--openocd-path",
+        dest="openocd",
+        default=None,
+        help="OpenOCD executable or directory; overrides auto-search",
+    )
+    p_new.add_argument(
+        "--gdb",
+        "--gdb-path",
+        dest="gdb",
+        default=None,
+        help="arm-none-eabi-gdb executable or directory; overrides auto-search",
+    )
     p_new.add_argument("--dry-run", action="store_true", help="Show operations without creating files")
     p_new.add_argument("--no-build", action="store_true", help="Skip final cmake configure + build")
 
@@ -262,6 +404,20 @@ def parse_args() -> argparse.Namespace:
     p_regen.add_argument("project_dir", nargs="?", default=".", help="Project directory (default: current dir)")
     p_regen.add_argument("-s", "--sdk", default=DEFAULT_SDK_DIR, help=f"MSPM0 SDK path")
     p_regen.add_argument("--sysconfig", default=DEFAULT_SYSCONFIG_DIR, help=f"SysConfig install dir")
+    p_regen.add_argument(
+        "--openocd",
+        "--openocd-path",
+        dest="openocd",
+        default=None,
+        help="OpenOCD executable or directory; overrides auto-search",
+    )
+    p_regen.add_argument(
+        "--gdb",
+        "--gdb-path",
+        dest="gdb",
+        default=None,
+        help="arm-none-eabi-gdb executable or directory; overrides auto-search",
+    )
     p_regen.add_argument("--no-build", action="store_true", help="Skip rebuild after regeneration")
     p_regen.add_argument("--backup", action="store_true", default=True, help="Backup old generated files before overwriting (default: on)")
     p_regen.add_argument("--no-backup", action="store_false", dest="backup", help="Don't backup old files")
@@ -881,7 +1037,7 @@ LAUNCH_JSON_TEMPLATE = """\
                 "{openocd_scripts}"
             ],
             "serverpath": "{openocd_bin}",
-            "armToolchainPath": "{gdb_dir}"
+            "gdbPath": "{gdb_path}"
         }}
     ]
 }}"""
@@ -994,21 +1150,9 @@ def write_launch_json(project_dir: str, ctx: dict, dry_run: bool = False):
     )
     debugger_label = "CMSIS-DAP" if debugger == "cmsis-dap" else "XDS110"
 
-    # Build OpenOCD paths, handling Windows variants
-    openocd_dir = ctx["openocd_dir"]
-    if IS_WIN and openocd_dir.endswith(".exe"):
-        # openocd_dir already points to openocd.exe (from CCS fallback)
-        openocd_bin = openocd_dir
-        openocd_scripts = os.path.join(os.path.dirname(openocd_dir), "..", "scripts")
-    else:
-        openocd_exe = "openocd.exe" if IS_WIN else "openocd"
-        openocd_bin = os.path.join(openocd_dir, "bin", openocd_exe)
-        openocd_scripts = os.path.join(openocd_dir, "share", "openocd", "scripts")
-
-    # Normalize: JSON-friendly forward slashes
-    openocd_bin = _posix_path(openocd_bin)
-    openocd_scripts = _posix_path(openocd_scripts)
-    gdb_dir = _posix_path(ctx["gdb_dir"])
+    openocd_bin = _posix_path(ctx["openocd_exe"])
+    openocd_scripts = _posix_path(ctx.get("openocd_scripts", ""))
+    gdb_path = _posix_path(ctx["gdb_exe"])
 
     content = LAUNCH_JSON_TEMPLATE.format(
         device_name=ctx["device_name"],
@@ -1017,7 +1161,7 @@ def write_launch_json(project_dir: str, ctx: dict, dry_run: bool = False):
         config_files=config_files,
         openocd_scripts=openocd_scripts,
         openocd_bin=openocd_bin,
-        gdb_dir=gdb_dir,
+        gdb_path=gdb_path,
     )
 
     dest = os.path.join(project_dir, ".vscode", "launch.json")
@@ -1454,14 +1598,17 @@ def cmd_regenerate(args):
 # _build_ctx() — shared context builder
 # =============================================================================
 def _build_ctx(args, project_dir, chip, dl_meta):
+    openocd_exe = _resolve_openocd_exe(args.openocd)
+    gdb_exe = _resolve_gdb_exe(args.gdb)
     return {
         "project_name": args.name,
         "project_dir": project_dir,
         "sdk_dir": args.sdk,
         "sysconfig_dir": args.sysconfig,
         "debugger": args.debugger,
-        "openocd_dir": args.openocd,
-        "gdb_dir": args.gdb,
+        "openocd_exe": openocd_exe,
+        "openocd_scripts": _resolve_openocd_scripts(openocd_exe),
+        "gdb_exe": gdb_exe,
         "cpu": chip["cpu"],
         "startup": chip["startup"],
         "driverlib": chip["driverlib"],
