@@ -48,19 +48,6 @@ else:
 # SysConfig CLI entry point
 _SYSCONFIG_CLI_NAME = "sysconfig_cli.bat" if IS_WIN else "sysconfig_cli.sh"
 
-# OpenOCD / GDB default locations
-if IS_WIN:
-    _CCS_BASE = os.environ.get("CCS_BASE", "C:\\ti")
-    _OPENOCD_FALLBACK = os.path.join(_CCS_BASE, "ccs_base", "DebugServer", "bin", "openocd.exe")
-    _GDB_FALLBACK = os.path.join(_CCS_BASE, "ccs_base", "DebugServer", "bin", "arm-none-eabi-gdb.exe")
-else:
-    _OPENOCD_FALLBACK = os.path.expanduser(
-        "~/.config/Texas Instruments/ti-embedded-debug/openocd/1.3.1.50"
-    )
-    _GDB_FALLBACK = os.path.expanduser(
-        "~/.config/Texas Instruments/ti-embedded-debug/arm-none-eabi-gdb/14.2.rel1.1"
-    )
-
 # CMake generator
 _CMAKE_GENERATOR = "Ninja" if IS_WIN else "Unix Makefiles"
 
@@ -94,7 +81,6 @@ def _tool_cache_roots() -> List[str]:
     if IS_WIN:
         roots.extend([
             str(home / "AppData" / "Local" / "Texas Instruments" / "ti-embedded-debug"),
-            str(home / ".AppData" / "Local" / "Texas Instruments" / "ti-embedded-debug"),
         ])
     else:
         roots.append(str(home / ".config" / "Texas Instruments" / "ti-embedded-debug"))
@@ -126,7 +112,8 @@ def _resolve_sysconfig() -> str:
 
 def _read_text_file(path: str) -> str:
     """Read a text file using UTF-8 first, then Windows-compatible fallbacks."""
-    for encoding in ("utf-8-sig", "utf-8", "gbk", "cp936"):
+    # utf-8-sig handles BOM; gbk/cp936 cover Windows Chinese locale
+    for encoding in ("utf-8-sig", "gbk", "cp936"):
         try:
             with open(path, "r", encoding=encoding) as f:
                 return f.read()
@@ -176,7 +163,7 @@ def _resolve_openocd_exe(preferred: Optional[str] = None) -> str:
     if path_exe:
         return path_exe
 
-    for root in filter(None, [os.environ.get("TI_ROOT"), os.environ.get("CCS_BASE"), Path.cwd().anchor]):
+    for root in filter(None, [os.environ.get("TI_ROOT"), os.environ.get("CCS_BASE")]):
         discovered = _discover_file(root, executable_name)
         if discovered:
             return discovered
@@ -205,7 +192,7 @@ def _resolve_gdb_exe(preferred: Optional[str] = None) -> str:
     if path_exe:
         return path_exe
 
-    for root in filter(None, [os.environ.get("TI_ROOT"), os.environ.get("CCS_BASE"), Path.cwd().anchor]):
+    for root in filter(None, [os.environ.get("TI_ROOT"), os.environ.get("CCS_BASE")]):
         discovered = _discover_file(root, executable_name)
         if discovered:
             return discovered
@@ -213,27 +200,18 @@ def _resolve_gdb_exe(preferred: Optional[str] = None) -> str:
     return executable_name
 
 
-DEFAULT_OPENOCD_EXE = _resolve_openocd_exe()
-DEFAULT_GDB_EXE = _resolve_gdb_exe()
-
-
 def _posix_path(path: str) -> str:
     """Normalize a filesystem path for CMake/JSON by using forward slashes."""
     return str(Path(path)).replace("\\", "/")
 
 
-def _toolchain_dir(path: str) -> str:
-    """Return the directory that contains a tool executable or toolchain root."""
-    if not path:
-        return path
-    normalized = Path(path)
-    if normalized.is_file() or normalized.suffix.lower() == ".exe":
-        return str(normalized.parent)
-    return str(normalized)
-
-
 def _resolve_openocd_scripts(openocd_exe: str) -> str:
-    """Derive the OpenOCD scripts directory from the executable location."""
+    """Derive the OpenOCD scripts directory from the executable location.
+
+    When the executable path is known, scripts are located relative to it.
+    Otherwise falls back to searching the TI tool cache roots for an openocd
+    installation and deriving the scripts directory from there.
+    """
     if not openocd_exe:
         return ""
 
@@ -248,6 +226,17 @@ def _resolve_openocd_scripts(openocd_exe: str) -> str:
         for candidate in candidates:
             if candidate.is_dir():
                 return str(candidate)
+
+    # Fallback: search tool cache roots for an openocd installation,
+    # then derive its scripts directory.
+    for root in _tool_cache_roots():
+        openocd_dir = _discover_dir(root, r"openocd")
+        if openocd_dir:
+            for sub in ["scripts", "share/openocd/scripts"]:
+                candidate = os.path.join(openocd_dir, sub)
+                if os.path.isdir(candidate):
+                    return candidate
+
     return ""
     
 def _cmake_cached_generator(build_dir: str) -> Optional[str]:
@@ -258,10 +247,6 @@ def _cmake_cached_generator(build_dir: str) -> Optional[str]:
 
     content = _read_text_file(cache_file)
     match = re.search(r"^CMAKE_GENERATOR:INTERNAL=(.+)$", content, re.MULTILINE)
-    if match:
-        return match.group(1).strip()
-
-    match = re.search(r"^CMAKE_GENERATOR:STRING=(.+)$", content, re.MULTILINE)
     if match:
         return match.group(1).strip()
 
@@ -417,6 +402,12 @@ def parse_args() -> argparse.Namespace:
         dest="gdb",
         default=None,
         help="arm-none-eabi-gdb executable or directory; overrides auto-search",
+    )
+    p_regen.add_argument(
+        "-d", "--debugger",
+        choices=["cmsis-dap", "xds110", "none"],
+        default="cmsis-dap",
+        help="Debugger type for VSCode configs (default: cmsis-dap)",
     )
     p_regen.add_argument("--no-build", action="store_true", help="Skip rebuild after regeneration")
     p_regen.add_argument("--backup", action="store_true", default=True, help="Backup old generated files before overwriting (default: on)")
@@ -1302,7 +1293,7 @@ def print_summary(ctx: dict):
 
   Build:
     cd {ctx['project_dir']}
-        cmake -B build -G {_CMAKE_GENERATOR} -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .
+    cmake -B build -G {_CMAKE_GENERATOR} -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .
     cmake --build build -j$(nproc)
 
   Flash (OpenOCD):
@@ -1586,6 +1577,27 @@ def cmd_regenerate(args):
     if not args.dry_run and not args.no_build:
         info("--- Rebuilding ---")
         run_cmake_build(project_dir, args.dry_run)
+
+    # ---- Regenerate VSCode configs (paths may have changed) ----
+    if args.debugger != "none":
+        info("--- Updating VSCode configs ---")
+        project_name = os.path.basename(project_dir)
+        openocd_exe = _resolve_openocd_exe(args.openocd)
+        gdb_exe = _resolve_gdb_exe(args.gdb)
+        vscode_ctx = {
+            "project_name": project_name,
+            "project_dir": project_dir,
+            "sdk_dir": args.sdk,
+            "debugger": args.debugger,
+            "openocd_exe": openocd_exe,
+            "openocd_scripts": _resolve_openocd_scripts(openocd_exe),
+            "gdb_exe": gdb_exe,
+            "cpu": chip["cpu"],
+            "device_name": chip["device_name"],
+            "device_define": chip["device_define"],
+        }
+        write_launch_json(project_dir, vscode_ctx, args.dry_run)
+        write_cpp_properties(project_dir, vscode_ctx, args.dry_run)
 
     print(f"""
 {Color.BOLD}{Color.GREEN}  Regeneration complete.{Color.RESET}
