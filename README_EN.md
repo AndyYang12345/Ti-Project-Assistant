@@ -12,6 +12,16 @@
 
 ---
 
+## Installation
+
+```bash
+pip install ti-project-assistant
+```
+
+Once installed, the `mspm0-init` command is available system-wide (Windows / Linux / macOS).
+
+---
+
 ## Quick Start
 
 ```bash
@@ -230,10 +240,13 @@ mspm0-init
 git clone git@github.com:AndyYang12345/Ti-Project-Assistant.git
 cd ti-project-assistant
 
-# Install to PATH (Linux)
+# Editable install (recommended, changes take effect immediately)
+pip install -e .
+
+# Or manual install to PATH (Linux)
 ln -s $(pwd)/mspm0-init ~/bin/mspm0-init
 
-# Install to PATH (Windows)
+# Or manual install to PATH (Windows)
 # Add ti-project-assistant directory to system PATH
 ```
 

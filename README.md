@@ -12,6 +12,16 @@
 
 ---
 
+## 安装
+
+```bash
+pip install ti-project-assistant
+```
+
+安装完成后，`mspm0-init` 命令即可在终端中使用（Windows / Linux / macOS）。
+
+---
+
 ## 快速开始
 
 ```bash
@@ -230,10 +240,13 @@ mspm0-init
 git clone git@github.com:AndyYang12345/Ti-Project-Assistant.git
 cd ti-project-assistant
 
-# 安装到 PATH（Linux）
+# 可编辑安装（推荐，修改即时生效）
+pip install -e .
+
+# 或手动安装到 PATH（Linux）
 ln -s $(pwd)/mspm0-init ~/bin/mspm0-init
 
-# 安装到 PATH（Windows）
+# 或手动安装到 PATH（Windows）
 # 将 ti-project-assistant 目录加入系统 PATH
 ```
 

@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ti-project-assistant"
+version = "0.1.0"
+description = "TI MSPM0 one-click project init tool — bootstrap embedded projects from SysConfig"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.8"
+authors = [
+    {name = "Harekasa", email = "2459743667@qq.com"}
+]
+keywords = ["mspm0", "ti", "embedded", "sysconfig", "cmake", "arm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Embedded Systems",
+]
+
+[project.scripts]
+mspm0-init = "ti_project_assistant.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/AndyYang12345/Ti-Project-Assistant"
+Repository = "https://github.com/AndyYang12345/Ti-Project-Assistant.git"
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    ".claude/",
+    "__pycache__/",
+]

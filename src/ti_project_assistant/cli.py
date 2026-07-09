@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 mspm0-init — TI MSPM0 one-click project init tool
 
@@ -351,6 +350,12 @@ def parse_args() -> argparse.Namespace:
         """),
     )
 
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Check development environment and report tool status",
+    )
+
     sub = parser.add_subparsers(dest="command", help="Subcommands")
 
     # ---- subcommand: new ----
@@ -414,6 +419,9 @@ def parse_args() -> argparse.Namespace:
     p_regen.add_argument("--no-backup", action="store_false", dest="backup", help="Don't backup old files")
     p_regen.add_argument("--dry-run", action="store_true", help="Show operations without creating files")
 
+    # ---- subcommand: check ----
+    sub.add_parser("check", help="Check development environment for required tools")
+
     # Backward compat: if no subcommand given, default to 'new'
     # argparse will error without a subcommand; we handle this in main()
     return parser.parse_args()
@@ -471,6 +479,88 @@ def validate_environment(args: argparse.Namespace) -> bool:
             ok = False
 
     return ok
+
+
+def cmd_check(args: argparse.Namespace):
+    """Check development environment and report status of all required tools."""
+    print()
+    info("TI Project Assistant — Environment Check")
+    info(f"Platform: {'Windows' if IS_WIN else 'Linux'}")
+    info(f"Python: v{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+    print()
+
+    all_ok = True
+
+    def check_item(name: str, ok: bool, detail: str, required: bool = True):
+        nonlocal all_ok
+        if ok:
+            success(f"[OK] {name}: {detail}")
+        elif required:
+            error(f"[MISSING] {name}: {detail}")
+            all_ok = False
+        else:
+            warn(f"[OPTIONAL] {name}: {detail}")
+
+    # 1) Python version
+    py_ok = sys.version_info >= (3, 8)
+    check_item("Python", py_ok,
+               f"v{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+               if py_ok else f"v{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro} (need ≥ 3.8)")
+
+    # 2) arm-none-eabi-gcc
+    gcc = shutil.which("arm-none-eabi-gcc")
+    check_item("ARM GCC", gcc is not None, gcc or "not found — install gcc-arm-none-eabi")
+
+    # 3) arm-none-eabi-objcopy
+    objcopy = shutil.which("arm-none-eabi-objcopy")
+    check_item("ARM objcopy", objcopy is not None, objcopy or "not found (bundled with ARM GCC)")
+
+    # 4) CMake
+    cmake = shutil.which("cmake")
+    check_item("CMake", cmake is not None, cmake or "not found — install cmake")
+
+    # 5) Ninja
+    ninja = shutil.which("ninja")
+    check_item("Ninja", ninja is not None, ninja or "not found — install ninja-build")
+
+    # 6) ARM GDB
+    gdb = _resolve_gdb_exe()
+    gdb_ok = os.path.isfile(gdb) or shutil.which(gdb) is not None
+    check_item("ARM GDB", gdb_ok, gdb if gdb_ok else "not found — install arm-none-eabi-gdb")
+
+    # 7) SysConfig CLI
+    sysconfig_dir = _resolve_sysconfig()
+    cli_path = os.path.join(sysconfig_dir, _SYSCONFIG_CLI_NAME)
+    cli_ok = os.path.isfile(cli_path)
+    check_item("SysConfig CLI", cli_ok,
+               cli_path if cli_ok else f"not found — install SysConfig to ~/ti/ (checked: {sysconfig_dir})")
+
+    # 8) MSPM0 SDK
+    sdk_dir = _resolve_sdk()
+    product_json = os.path.join(sdk_dir, ".metadata", "product.json")
+    sdk_ok = os.path.isfile(product_json)
+    check_item("MSPM0 SDK", sdk_ok,
+               sdk_dir if sdk_ok else f"not found — install MSPM0 SDK to ~/ti/ (checked: {sdk_dir})")
+
+    # 9) OpenOCD
+    openocd = _resolve_openocd_exe()
+    openocd_ok = os.path.isfile(openocd) or shutil.which(openocd) is not None
+    check_item("OpenOCD", openocd_ok,
+               openocd if openocd_ok else "not found — install via VSCode TI plugin or CCS Theia")
+
+    # Summary
+    print()
+    cmake_gen = _CMAKE_GENERATOR
+    info(f"CMake generator: {cmake_gen}")
+    info(f"TI tools base:  {_TI_BASE}")
+
+    print()
+    if all_ok:
+        success("All checks passed! Environment is ready for MSPM0 development.")
+    else:
+        error("Some checks failed. Install the missing dependencies listed above.")
+
+    return all_ok
 
 
 # =============================================================================
@@ -1640,7 +1730,7 @@ def _build_ctx(args, project_dir, chip, dl_meta):
 def main():
     # Backward compat: if first arg is not a subcommand, insert 'new'
     _args = sys.argv[1:]
-    if _args and _args[0] not in ("new", "regenerate", "-h", "--help"):
+    if _args and _args[0] not in ("new", "regenerate", "check", "-h", "--help", "--check"):
         # Check if it looks like a path or is an option flag
         if not _args[0].startswith("-"):
             sys.argv.insert(1, "new")
@@ -1651,8 +1741,12 @@ def main():
 
     if args.command == "regenerate":
         cmd_regenerate(args)
+    elif args.command == "check":
+        cmd_check(args)
     elif args.command == "new" or hasattr(args, "name"):
         cmd_new(args)
+    elif args.check:
+        cmd_check(args)
     elif args.command is None:
         # No subcommand — intelligently detect context
         cwd = Path.cwd()
