@@ -1567,17 +1567,23 @@ Thumbs.db
 # =============================================================================
 # Step 8: Template - .vscode/tasks.json
 # =============================================================================
-TASKS_JSON_TEMPLATE = """\
-{
-    "version": "2.0.0",
-    "tasks": [
+def _build_tasks_json(sysconfig_nw: str, sysconfig_app: str, syscfg_file: str,
+                      openocd_exe: str, openocd_scripts: str,
+                      flash_interface: str, project_name: str) -> str:
+    """Build tasks.json content as a properly-escaped JSON string.
+
+    All path values are serialized via json.dumps(), which ensures that
+    Windows backslashes (e.g. C:\\ti\\nw\\nw.exe) are correctly escaped
+    as double backslashes in the JSON output.
+    """
+    tasks = [
         {
             "label": "CMake Configure",
             "type": "shell",
             "command": "cmake",
             "args": [
                 "-B", "build",
-                "-G", "___CMAKE_GENERATOR___",
+                "-G", _CMAKE_GENERATOR,
                 "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
                 "."
             ],
@@ -1597,7 +1603,7 @@ TASKS_JSON_TEMPLATE = """\
             ],
             "group": {
                 "kind": "build",
-                "isDefault": true
+                "isDefault": True
             },
             "problemMatcher": [
                 "$gcc"
@@ -1624,11 +1630,11 @@ TASKS_JSON_TEMPLATE = """\
             "label": "⚙️ 打开 TI SysConfig",
             "detail": "Launch TI SysConfig GUI to edit pin/peripheral configuration",
             "type": "shell",
-            "command": "___SYSCONFIG_NW___",
+            "command": sysconfig_nw,
             "args": [
                 "--disable-gpu",
-                "___SYSCONFIG_APP___",
-                "--script", "___SYSCFG_FILE___"
+                sysconfig_app,
+                "--script", syscfg_file
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -1643,12 +1649,12 @@ TASKS_JSON_TEMPLATE = """\
             "label": "Flash MSPM0",
             "detail": "Flash firmware to device without entering debug mode",
             "type": "shell",
-            "command": "___OPENOCD_EXE___",
+            "command": openocd_exe,
             "args": [
-                "-s", "___OPENOCD_SCRIPTS___",
-                "-f", "___FLASH_INTERFACE___",
+                "-s", openocd_scripts,
+                "-f", flash_interface,
                 "-f", "target/ti_mspm0.cfg",
-                "-c", "program build/___PROJECT_NAME___.elf verify reset exit"
+                "-c", f"program build/{project_name}.elf verify reset exit"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -1660,7 +1666,7 @@ TASKS_JSON_TEMPLATE = """\
             }
         }
     ]
-}"""
+    return json.dumps({"version": "2.0.0", "tasks": tasks}, indent=4, ensure_ascii=False)
 
 VSCode_SETTINGS_TEMPLATE = """\
 {
@@ -1812,7 +1818,11 @@ def write_tasks_json(project_dir: str, sysconfig_cli: str = "", syscfg_name: str
                      openocd_exe: str = "openocd", openocd_scripts: str = "",
                      debugger: str = "cmsis-dap", project_name: str = "",
                      dry_run: bool = False):
-    """Generate .vscode/tasks.json."""
+    """Generate .vscode/tasks.json.
+
+    Paths are serialized via json.dumps() so that Windows backslashes are
+    correctly escaped as double backslashes in the JSON output.
+    """
     dest = os.path.join(project_dir, ".vscode", "tasks.json")
     if dry_run:
         info(f"[dry-run] Write .vscode/tasks.json")
@@ -1825,14 +1835,15 @@ def write_tasks_json(project_dir: str, sysconfig_cli: str = "", syscfg_name: str
         "xds110": "interface/xds110.cfg",
         "jlink": "interface/jlink.cfg",
     }.get(debugger, "interface/cmsis-dap.cfg")
-    content = TASKS_JSON_TEMPLATE.replace("___CMAKE_GENERATOR___", _CMAKE_GENERATOR)
-    content = content.replace("___SYSCONFIG_NW___", nw_bin)
-    content = content.replace("___SYSCONFIG_APP___", app_dir)
-    content = content.replace("___SYSCFG_FILE___", syscfg_name)
-    content = content.replace("___OPENOCD_EXE___", openocd_exe)
-    content = content.replace("___OPENOCD_SCRIPTS___", openocd_scripts)
-    content = content.replace("___FLASH_INTERFACE___", flash_interface)
-    content = content.replace("___PROJECT_NAME___", project_name)
+    content = _build_tasks_json(
+        sysconfig_nw=nw_bin,
+        sysconfig_app=app_dir,
+        syscfg_file=syscfg_name,
+        openocd_exe=openocd_exe,
+        openocd_scripts=openocd_scripts,
+        flash_interface=flash_interface,
+        project_name=project_name,
+    )
     with open(dest, "w", encoding="utf-8") as f:
         f.write(content)
     info("  ✓ .vscode/tasks.json")
