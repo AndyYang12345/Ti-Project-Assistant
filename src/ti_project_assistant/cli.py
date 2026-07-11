@@ -1205,10 +1205,10 @@ DL_CONFIG_C_STUB = """\
 #include "ti_msp_dl_config.h"
 
 SYSCONFIG_WEAK void SYSCFG_DL_init(void)
-{{
+{
     /* No peripherals configured yet.
      * Add pins/peripherals in SysConfig and regenerate to populate. */
-}}
+}
 """
 
 
@@ -1502,19 +1502,19 @@ MAIN_C_TEMPLATE = """\
 #include "ti_msp_dl_config.h"
 
 static void delay_ms(uint32_t ms)
-{{
+{
     delay_cycles(ms * (CPUCLK_FREQ / 1000));
-}}
+}
 
 int main(void)
-{{
+{
     SYSCFG_DL_init();
 
-    while (1) {{
+    while (1) {
         /* TODO: Add your application logic here */
         delay_ms(1000);
-    }}
-}}
+    }
+}
 """
 
 
@@ -2053,7 +2053,7 @@ def print_summary(ctx: dict):
 # =============================================================================
 def cmd_new(args):
     print(f"\n{Color.BOLD}{Color.CYAN}╔════════════════════════════════════╗")
-    print(f"║   MSPM0 Project Init v0.3.2       ║")
+    print(f"║   MSPM0 Project Init v0.3.3       ║")
     print(f"╚════════════════════════════════════╝{Color.RESET}\n")
 
     # ── Step 1: Auto-discover syscfg if not provided ──
