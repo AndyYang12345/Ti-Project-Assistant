@@ -46,6 +46,8 @@ else:
 
 # SysConfig CLI entry point
 _SYSCONFIG_CLI_NAME = "sysconfig_cli.bat" if IS_WIN else "sysconfig_cli.sh"
+_SYSCONFIG_GUI_NAME = "sysconfig_gui.bat" if IS_WIN else "sysconfig_gui.sh"
+_SYSCONFIG_NW_NAME = "nw.exe" if IS_WIN else "nw"
 
 # CMake generator
 _CMAKE_GENERATOR = "Ninja" if IS_WIN else "Unix Makefiles"
@@ -1619,24 +1621,47 @@ TASKS_JSON_TEMPLATE = """\
             "problemMatcher": []
         },
         {
-            "label": "Open SysConfig",
+            "label": "⚙️ 打开 TI SysConfig",
             "detail": "Launch TI SysConfig GUI to edit pin/peripheral configuration",
             "type": "shell",
-            "command": "___SYSCONFIG_CLI___",
+            "command": "___SYSCONFIG_NW___",
             "args": [
-                "___SYSCONFIG_FILE___"
+                "--disable-gpu",
+                "___SYSCONFIG_APP___",
+                "--script", "___SYSCFG_FILE___"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
             },
             "problemMatcher": [],
             "presentation": {
-                "reveal": "never"
+                "reveal": "silent",
+                "panel": "shared"
             }
         }
     ]
 }"""
 
+VSCode_SETTINGS_TEMPLATE = """\
+{
+    "VsCodeTaskButtons.tasks": [
+        {
+            "label": "$(symbol-misc) SysConfig",
+            "task": "⚙️ 打开 TI SysConfig",
+            "tooltip": "打开 TI SysConfig 图形化配置界面"
+        },
+        {
+            "label": "$(play) Build",
+            "task": "Build MSPM0 project",
+            "tooltip": "编译 MSPM0 项目 (cmake --build)"
+        },
+        {
+            "label": "$(trash) Clean",
+            "task": "Clean",
+            "tooltip": "清理构建产物"
+        }
+    ]
+}"""
 
 # =============================================================================
 # Step 8b: Template - .vscode/launch.json
@@ -1764,9 +1789,13 @@ def write_tasks_json(project_dir: str, sysconfig_cli: str = "", syscfg_name: str
     if dry_run:
         info(f"[dry-run] Write .vscode/tasks.json")
         return
+    sysconfig_dir = os.path.dirname(sysconfig_cli)
+    nw_bin = os.path.join(sysconfig_dir, "nw", _SYSCONFIG_NW_NAME)
+    app_dir = os.path.join(sysconfig_dir, "app")
     content = TASKS_JSON_TEMPLATE.replace("___CMAKE_GENERATOR___", _CMAKE_GENERATOR)
-    content = content.replace("___SYSCONFIG_CLI___", sysconfig_cli)
-    content = content.replace("___SYSCONFIG_FILE___", syscfg_name)
+    content = content.replace("___SYSCONFIG_NW___", nw_bin)
+    content = content.replace("___SYSCONFIG_APP___", app_dir)
+    content = content.replace("___SYSCFG_FILE___", syscfg_name)
     with open(dest, "w") as f:
         f.write(content)
     info("  ✓ .vscode/tasks.json")
@@ -1829,6 +1858,31 @@ def write_cpp_properties(project_dir: str, ctx: dict, dry_run: bool = False):
     with open(dest, "w") as f:
         f.write(content)
     info("  ✓ .vscode/c_cpp_properties.json")
+
+
+def write_vscode_settings(project_dir: str, dry_run: bool = False):
+    """Generate .vscode/settings.json with Task Buttons config for status-bar buttons."""
+    dest = os.path.join(project_dir, ".vscode", "settings.json")
+    if dry_run:
+        info("[dry-run] Write .vscode/settings.json (Task Buttons)")
+        return
+
+    # Merge with existing settings if present
+    existing = {}
+    if os.path.isfile(dest):
+        try:
+            with open(dest, "r") as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    tb_config = json.loads(VSCode_SETTINGS_TEMPLATE)
+    existing.update(tb_config)
+
+    with open(dest, "w") as f:
+        json.dump(existing, f, indent=4, ensure_ascii=False)
+        f.write("\n")
+    info("  ✓ .vscode/settings.json (Task Buttons)")
 
 
 # =============================================================================
@@ -2074,6 +2128,7 @@ def cmd_new(args):
                      dry_run=args.dry_run)
     write_launch_json(project_dir, ctx, args.dry_run)
     write_cpp_properties(project_dir, ctx, args.dry_run)
+    write_vscode_settings(project_dir, args.dry_run)
 
     # ── Clean up temp directory ──
     if not args.dry_run and os.path.isdir(sysconfig_tmp):
@@ -2166,7 +2221,9 @@ def cmd_regenerate(args):
         for f in GENERATED_FILES:
             src = os.path.join(project_dir, f)
             if os.path.isfile(src):
-                shutil.copy2(src, os.path.join(backup_dir, f))
+                dst = os.path.join(backup_dir, f)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
         info(f"Backed up to {backup_dir}/")
 
     # ---- Run SysConfig CLI ----
@@ -2261,6 +2318,9 @@ def cmd_regenerate(args):
                          dry_run=args.dry_run)
         write_launch_json(project_dir, vscode_ctx, args.dry_run)
         write_cpp_properties(project_dir, vscode_ctx, args.dry_run)
+
+    # ---- Update VSCode settings (Task Buttons, etc.) ----
+    write_vscode_settings(project_dir, args.dry_run)
 
     # ---- Git init (if not already a repo) ----
     if not args.no_git and not os.path.isdir(os.path.join(project_dir, ".git")):

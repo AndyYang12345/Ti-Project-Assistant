@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![MSPM0](https://img.shields.io/badge/chip-MSPM0-red)](https://www.ti.com/microcontrollers-mcus-processors/arm-based-microcontrollers/mspm0/overview.html)
-[![Version](https://img.shields.io/badge/version-v0.2.0-informational)](https://github.com/AndyYang12345/Ti-Project-Assistant)
+[![Version](https://img.shields.io/badge/version-v0.2.2-informational)](https://github.com/AndyYang12345/Ti-Project-Assistant)
 
 **One command** to bootstrap a complete TI MSPM0 embedded project from a [SysConfig](https://www.ti.com/tool/SYSCONFIG) file. No CCS required.
 
@@ -58,7 +58,9 @@ The script automates:
 - Dynamically resolves **all 58 MSPM0 chips** from the SDK at runtime (startup files, driverlib, memory layout — all auto-discovered, no hardcoding)
 - Creates a layered project directory structure (`config/`, `src/app/`, `src/modules/`, `src/utils/`)
 - Generates `CMakeLists.txt` with `file(GLOB_RECURSE)` for automatic source discovery (arm-none-eabi-gcc toolchain)
-- Generates `.vscode/` configs (`launch.json` / `tasks.json` / `c_cpp_properties.json`)
+- Generates `.vscode/` configs (`launch.json` / `tasks.json` / `settings.json` / `c_cpp_properties.json`)
+- Built-in `⚙️ 打开 TI SysConfig` VSCode task to launch the GUI configurator in one click
+- Supports [Task Buttons](https://marketplace.visualstudio.com/items?itemName=spencerwmiles.vscode-task-buttons) extension — SysConfig / Build / Clean buttons directly in the status bar
 - Auto cmake configure + build verification
 - Auto `git init` + `.gitignore` (enabled when Git is detected; skip with `--no-git`)
 
@@ -161,6 +163,12 @@ mspm0-init regenerate /path/to/proj # specify path
 
 `regenerate` backs up old files to `.sysconfig_backup/`. Use `--no-backup` to skip.
 
+Change debugger without recreating the project:
+```bash
+mspm0-init regenerate -d xds110   # Switch from CMSIS-DAP to XDS110
+mspm0-init regenerate -d jlink     # Switch to JLink
+```
+
 ### All options
 
 ```
@@ -179,6 +187,7 @@ mspm0-init new [syscfg] -n NAME [options]
 
 mspm0-init regenerate [project_dir] [options]
 
+  -d, --debugger TYPE    Change debugger: cmsis-dap | xds110 | jlink | none
   --no-build             Skip rebuild
   --no-backup            Don't backup old files
   --dry-run              Preview mode
@@ -216,7 +225,8 @@ my_project/
 ├── build/                      # Build output (ELF, HEX, BIN, MAP)
 └── .vscode/
     ├── launch.json             # Debug config (CMSIS-DAP / XDS110 / JLink)
-    ├── tasks.json              # Build tasks
+    ├── tasks.json              # Build tasks + Open SysConfig
+    ├── settings.json           # Task Buttons status-bar buttons
     └── c_cpp_properties.json   # IntelliSense config
 ```
 

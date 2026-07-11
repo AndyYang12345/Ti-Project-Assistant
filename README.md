@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![MSPM0](https://img.shields.io/badge/芯片-MSPM0-red)](https://www.ti.com/microcontrollers-mcus-processors/arm-based-microcontrollers/mspm0/overview.html)
-[![Version](https://img.shields.io/badge/版本-v0.2.0-informational)](https://github.com/AndyYang12345/Ti-Project-Assistant)
+[![Version](https://img.shields.io/badge/版本-v0.2.2-informational)](https://github.com/AndyYang12345/Ti-Project-Assistant)
 
 **一行命令**，从 [SysConfig](https://www.ti.com/tool/SYSCONFIG) 图形化配置出发，自动生成完整的 TI MSPM0 嵌入式项目。告别 CCS 手动配置。
 
@@ -58,7 +58,9 @@ mspm0-init regenerate    # 仅更新生成文件，src/ 下手写代码安全无
 - 动态解析 SDK，自动匹配 **全部 58 款 MSPM0** 芯片的启动文件、driverlib、内存布局（无需硬编码）
 - 创建标准分层项目目录结构（`config/`、`src/app/`、`src/modules/`、`src/utils/`）
 - 生成 `CMakeLists.txt`（`file(GLOB_RECURSE)` 递归链接，arm-none-eabi-gcc 工具链）
-- 生成 `.vscode/` 三件套（`launch.json` / `tasks.json` / `c_cpp_properties.json`）
+- 生成 `.vscode/` 全套配置（`launch.json` / `tasks.json` / `settings.json` / `c_cpp_properties.json`）
+- 内置 `⚙️ 打开 TI SysConfig` VSCode 任务，一键启动图形化配置
+- 支持 [Task Buttons](https://marketplace.visualstudio.com/items?itemName=spencerwmiles.vscode-task-buttons) 插件，状态栏直接点击 SysConfig / Build / Clean
 - 自动 cmake configure + build 验证
 - 自动 `git init` + 写入 `.gitignore`（检测到 Git 已安装时启用，可用 `--no-git` 跳过）
 
@@ -161,6 +163,12 @@ mspm0-init regenerate /path/to/proj # 指定项目路径
 
 `regenerate` 会备份旧文件到 `.sysconfig_backup/`，可通过 `--no-backup` 跳过。
 
+更换调试器无需重建项目：
+```bash
+mspm0-init regenerate -d xds110   # 从 CMSIS-DAP 切换到 XDS110
+mspm0-init regenerate -d jlink     # 切换到 JLink
+```
+
 ### 全部参数
 
 ```
@@ -179,6 +187,7 @@ mspm0-init new [syscfg] -n NAME [选项]
 
 mspm0-init regenerate [项目目录] [选项]
 
+  -d, --debugger TYPE    更换调试器：cmsis-dap | xds110 | jlink | none
   --no-build             跳过重编译
   --no-backup            不备份旧文件
   --dry-run              预览模式
@@ -216,7 +225,8 @@ my_project/
 ├── build/                      # 构建输出（ELF / HEX / BIN / MAP）
 └── .vscode/
     ├── launch.json             # 调试配置（CMSIS-DAP / XDS110 / JLink）
-    ├── tasks.json              # 构建任务
+    ├── tasks.json              # 构建任务 + 打开 SysConfig
+    ├── settings.json           # Task Buttons 状态栏按钮
     └── c_cpp_properties.json   # IntelliSense 配置
 ```
 
