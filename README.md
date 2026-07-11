@@ -76,7 +76,7 @@ mspm0-init regenerate    # 仅更新生成文件，src/ 下手写代码安全无
 | TI MSPM0 SDK | 2.x | [下载](https://www.ti.com/tool/MSPM0-SDK) → 解压到 `~/ti/` |
 | TI SysConfig | 1.x | [下载](https://www.ti.com/tool/SYSCONFIG) → 解压到 `~/ti/` |
 | OpenOCD (TI 定制) | 1.3.x | 随 [CCS Theia](https://www.ti.com/tool/CCSTUDIO) 安装 |
-| arm-none-eabi-gdb | 14.x | 随 OpenOCD 一起安装 |
+| arm-none-eabi-gdb | 14.x | 从 TI VSCode 插件中自动安装 |
 
 一行装完基础工具：
 
@@ -95,7 +95,7 @@ sudo apt install python3 gcc-arm-none-eabi cmake ninja-build
 | TI MSPM0 SDK | 2.x | [下载](https://www.ti.com/tool/MSPM0-SDK) → 解压到 `C:\ti\` |
 | TI SysConfig | 1.x | [下载](https://www.ti.com/tool/SYSCONFIG) → 解压到 `C:\ti\` |
 | OpenOCD (TI 定制) | 1.3.x | 随 [CCS Theia](https://www.ti.com/tool/CCSTUDIO) 安装 |
-| arm-none-eabi-gdb | 14.x | 随 OpenOCD 一起安装 |
+| arm-none-eabi-gdb | 14.x | 从 TI VSCode 插件中自动安装 |
 
 ---
 

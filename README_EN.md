@@ -76,7 +76,7 @@ The script automates:
 | TI MSPM0 SDK | 2.x | [Download](https://www.ti.com/tool/MSPM0-SDK) → extract to `~/ti/` |
 | TI SysConfig | 1.x | [Download](https://www.ti.com/tool/SYSCONFIG) → extract to `~/ti/` |
 | OpenOCD (TI fork) | 1.3.x | Included with [CCS Theia](https://www.ti.com/tool/CCSTUDIO) |
-| arm-none-eabi-gdb | 14.x | Same as OpenOCD |
+| arm-none-eabi-gdb | 14.x | Auto-installed from TI VSCode plugin |
 
 One-liner:
 
@@ -95,7 +95,7 @@ sudo apt install python3 gcc-arm-none-eabi cmake ninja-build
 | TI MSPM0 SDK | 2.x | [Download](https://www.ti.com/tool/MSPM0-SDK) → extract to `C:\ti\` |
 | TI SysConfig | 1.x | [Download](https://www.ti.com/tool/SYSCONFIG) → extract to `C:\ti\` |
 | OpenOCD (TI fork) | 1.3.x | Included with [CCS Theia](https://www.ti.com/tool/CCSTUDIO) |
-| arm-none-eabi-gdb | 14.x | Same as OpenOCD |
+| arm-none-eabi-gdb | 14.x | Auto-installed from TI VSCode plugin |
 
 ---
 
