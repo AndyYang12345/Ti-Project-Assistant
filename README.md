@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![MSPM0](https://img.shields.io/badge/芯片-MSPM0-red)](https://www.ti.com/microcontrollers-mcus-processors/arm-based-microcontrollers/mspm0/overview.html)
-[![Version](https://img.shields.io/badge/版本-v0.3.0-informational)](https://github.com/AndyYang12345/Ti-Project-Assistant)
+[![Version](https://img.shields.io/badge/版本-v0.3.1-informational)](https://github.com/AndyYang12345/Ti-Project-Assistant)
 
 **一行命令**，从 [SysConfig](https://www.ti.com/tool/SYSCONFIG) 图形化配置出发，自动生成完整的 TI MSPM0 嵌入式项目。告别 CCS 手动配置。
 
