@@ -252,46 +252,298 @@ def _cmake_cached_generator(build_dir: str) -> Optional[str]:
     return None
 
 # =============================================================================
-# Chip mapping table — device_define -> hardware params + SDK resource paths
+# SDK metadata auto-discovery — no hardcoded chip table needed
 # =============================================================================
-CHIP_MAP: Dict[str, dict] = {
-    "__MSPM0G3507__": {
-        "cpu": "cortex-m0plus",
-        "startup": "ti/devices/msp/m0p/startup_system_files/gcc/startup_mspm0g350x_gcc.c",
-        "driverlib": "ti/driverlib/lib/gcc/m0p/mspm0g1x0x_g3x0x/driverlib.a",
-        "flash_kb": 128,
-        "sram_kb": 32,
-        "flash_origin": "0x00000000",
-        "flash_length": "0x00020000",
-        "sram_origin": "0x20200000",
-        "sram_length": "0x00008000",
-        "package_options": ["LQFP-48(PT)", "LQFP-64(PM)", "VQFN-32(RHB)"],
-    },
-    "__MSPM0G3505__": {
-        "cpu": "cortex-m0plus",
-        "startup": "ti/devices/msp/m0p/startup_system_files/gcc/startup_mspm0g350x_gcc.c",
-        "driverlib": "ti/driverlib/lib/gcc/m0p/mspm0g1x0x_g3x0x/driverlib.a",
-        "flash_kb": 64,
-        "sram_kb": 16,
-        "flash_origin": "0x00000000",
-        "flash_length": "0x00010000",
-        "sram_origin": "0x20200000",
-        "sram_length": "0x00004000",
-        "package_options": [],
-    },
-    "__MSPM0L1306__": {
-        "cpu": "cortex-m0plus",
-        "startup": "ti/devices/msp/m0p/startup_system_files/gcc/startup_mspm0l130x_gcc.c",
-        "driverlib": "ti/driverlib/lib/gcc/m0p/mspm0l11xx_l13xx/driverlib.a",
-        "flash_kb": 64,
-        "sram_kb": 8,
-        "flash_origin": "0x00000000",
-        "flash_length": "0x00010000",
-        "sram_origin": "0x20200000",
-        "sram_length": "0x00002000",
-        "package_options": [],
-    },
-}
+
+# Module-level caches (cleared per SDK instance)
+_sdk_metadata_cache: Dict[str, dict] = {}
+
+
+def _load_tirex_json(sdk_dir: str) -> dict:
+    """Load macros.tirex.json as a plain dict. Returns {} on failure."""
+    tirex_path = os.path.join(sdk_dir, ".metadata", ".tirex", "macros.tirex.json")
+    if not os.path.isfile(tirex_path):
+        return {}
+    try:
+        with open(tirex_path, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _parse_device_family_h(sdk_dir: str) -> Dict[str, str]:
+    """Parse DeviceFamily.h to map __DEVICE_DEFINE__ → PARENT_NAME.
+
+    Returns dict like: {'__MSPM0G3519__': 'MSPM0GX51X', ...}
+    """
+    cache_key = f"device_family_{sdk_dir}"
+    if cache_key in _sdk_metadata_cache:
+        return _sdk_metadata_cache[cache_key]
+
+    header_path = os.path.join(sdk_dir, "source", "ti", "devices", "DeviceFamily.h")
+    device_to_parent: Dict[str, str] = {}
+
+    if not os.path.isfile(header_path):
+        warn(f"DeviceFamily.h not found: {header_path}")
+        _sdk_metadata_cache[cache_key] = device_to_parent
+        return device_to_parent
+
+    content = _read_text_file(header_path)
+
+    # Split on #elif blocks (also handles the first #if defined(...) line)
+    blocks = re.split(r"#elif\s+", content)
+    for block in blocks:
+        defines = re.findall(r"__(\w+)__", block)
+        parent_match = re.search(
+            r"DeviceFamily_PARENT\s+DeviceFamily_PARENT_(\w+)", block
+        )
+        if parent_match and defines:
+            parent = parent_match.group(1)
+            for d in defines:
+                device_to_parent[f"__{d}__"] = parent
+
+    _sdk_metadata_cache[cache_key] = device_to_parent
+    return device_to_parent
+
+
+def _build_startup_index(sdk_dir: str) -> Dict[str, str]:
+    """Scan GCC startup directory, return pattern → relative-path mapping.
+
+    e.g. {'mspm0g351x': 'ti/devices/msp/m0p/startup_system_files/gcc/startup_mspm0g351x_gcc.c'}
+    """
+    cache_key = f"startup_index_{sdk_dir}"
+    if cache_key in _sdk_metadata_cache:
+        return _sdk_metadata_cache[cache_key]
+
+    startup_dir = os.path.join(
+        sdk_dir, "source", "ti", "devices", "msp", "m0p",
+        "startup_system_files", "gcc",
+    )
+    index: Dict[str, str] = {}
+
+    if not os.path.isdir(startup_dir):
+        warn(f"Startup directory not found: {startup_dir}")
+        _sdk_metadata_cache[cache_key] = index
+        return index
+
+    base_rel = os.path.join(
+        "ti", "devices", "msp", "m0p", "startup_system_files", "gcc",
+    )
+    for fname in sorted(os.listdir(startup_dir)):
+        if not fname.endswith("_gcc.c"):
+            continue
+        # startup_mspm0g351x_gcc.c → mspm0g351x
+        pattern = fname.replace("startup_", "").replace("_gcc.c", "")
+        index[pattern] = os.path.join(base_rel, fname)
+
+    _sdk_metadata_cache[cache_key] = index
+    return index
+
+
+def _match_startup(device: str, startup_index: Dict[str, str]) -> str:
+    """Match a device name to its GCC startup file.
+
+    Algorithm: lower-case the device name, then progressively replace
+    trailing digits with 'x' until a startup pattern matches.
+
+    Returns the relative path to the startup .c file, or an empty string.
+    """
+    dl = device.lower()
+    for i in range(len(dl) - 1, -1, -1):
+        if dl[i].isdigit():
+            candidate = dl[:i] + "x" + dl[i + 1 :]
+            if candidate in startup_index:
+                return startup_index[candidate]
+        else:
+            break
+    return ""
+
+
+def _resolve_driverlib(sdk_dir: str, device: str, parent_name: str = "") -> str:
+    """Derive the driverlib .a path from the DeviceFamily_PARENT name.
+
+    Falls back to macros.tirex.json grouping when the direct parent→directory
+    mapping has no match (e.g. MSPS003Fx, MSP32 chips).
+    """
+    dl_base = os.path.join("ti", "driverlib", "lib", "gcc", "m0p")
+
+    # --- Try direct parent → directory mapping ---
+    if parent_name:
+        dirname = parent_name.lower()
+        candidate = os.path.join(sdk_dir, "source", dl_base, dirname, "driverlib.a")
+        if os.path.isfile(candidate):
+            return os.path.join(dl_base, dirname, "driverlib.a")
+
+    # --- Fallback: find device in macros.tirex.json groups ---
+    tirex = _load_tirex_json(sdk_dir)
+    if tirex:
+        device_upper = device.upper().rstrip("X")
+        for item in tirex:
+            name = item.get("arraymacro", "")
+            if name.endswith("_devices") and device_upper in item.get("value", []):
+                # e.g. MSPM0C110x_devices → mspm0c110x
+                group_dir = name.replace("_devices", "").lower()
+                candidate = os.path.join(
+                    sdk_dir, "source", dl_base, group_dir, "driverlib.a"
+                )
+                if os.path.isfile(candidate):
+                    return os.path.join(dl_base, group_dir, "driverlib.a")
+
+    # --- Last resort ---
+    warn(f"Could not resolve driverlib for {device}, using generic path")
+    return os.path.join(dl_base, "mspm0g1x0x_g3x0x", "driverlib.a")
+
+
+def _resolve_memory_from_lds(sdk_dir: str, device: str) -> dict:
+    """Extract Flash/SRAM layout from the SDK's pre-built linker script.
+
+    Returns dict with keys: flash_origin, flash_length, flash_kb,
+    sram_origin, sram_length, sram_kb.
+    """
+    part_lower = device.lower().rstrip("x")
+    lds_dir = os.path.join(
+        sdk_dir, "source", "ti", "devices", "msp", "m0p", "linker_files", "gcc",
+    )
+    lds_path = os.path.join(lds_dir, f"{part_lower}.lds")
+
+    # --- Try exact match ---
+    if not os.path.isfile(lds_path):
+        # --- Fallback 1: find sibling in same tirex group ---
+        tirex = _load_tirex_json(sdk_dir)
+        sibling_lds = None
+        if tirex:
+            device_upper = device.upper().rstrip("X")
+            for item in tirex:
+                name = item.get("arraymacro", "")
+                if name.endswith("_devices") and device_upper in item.get("value", []):
+                    for sibling in item["value"]:
+                        sib_path = os.path.join(lds_dir, f"{sibling.lower()}.lds")
+                        if os.path.isfile(sib_path):
+                            sibling_lds = sib_path
+                            break
+                    break
+
+        # --- Fallback 2: find sibling in same DeviceFamily_PARENT group ---
+        if not sibling_lds:
+            device_to_parent = _parse_device_family_h(sdk_dir)
+            device_define = f"__{device.upper().rstrip('X')}__"
+            parent = device_to_parent.get(device_define, "")
+            if parent:
+                siblings = [
+                    d.strip("_") for d, p in device_to_parent.items()
+                    if p == parent
+                ]
+                for sibling in siblings:
+                    sib_path = os.path.join(lds_dir, f"{sibling.lower()}.lds")
+                    if os.path.isfile(sib_path):
+                        sibling_lds = sib_path
+                        break
+
+        if sibling_lds:
+            lds_path = sibling_lds
+        else:
+            warn(f"No linker script for {device}, using default memory layout")
+            return {
+                "flash_origin": "0x00000000",
+                "flash_length": "0x00020000",
+                "flash_kb": 128,
+                "sram_origin": "0x20200000",
+                "sram_length": "0x00008000",
+                "sram_kb": 32,
+            }
+
+    content = _read_text_file(lds_path)
+
+    # Parse MEMORY { FLASH (RX) : ORIGIN = 0x..., LENGTH = 0x... ... }
+    mem_match = re.search(r"MEMORY\s*{(.*?)}", content, re.DOTALL)
+    if not mem_match:
+        warn(f"Could not parse MEMORY block in {lds_path}")
+        return {
+            "flash_origin": "0x00000000",
+            "flash_length": "0x00020000",
+            "flash_kb": 128,
+            "sram_origin": "0x20200000",
+            "sram_length": "0x00008000",
+            "sram_kb": 32,
+        }
+
+    mem_block = mem_match.group(1)
+    regions: Dict[str, dict] = {}
+    for m in re.finditer(
+        r"(\w+)\s+\([^)]+\)\s*:\s*ORIGIN\s*=\s*(0x[0-9A-Fa-f]+),\s*LENGTH\s*=\s*(0x[0-9A-Fa-f]+)",
+        mem_block,
+    ):
+        name = m.group(1)
+        origin = m.group(2)
+        length = int(m.group(3), 16)
+        regions[name] = {"origin": origin, "length": m.group(3), "length_bytes": length}
+
+    flash = regions.get("FLASH", {"origin": "0x00000000", "length": "0x00020000", "length_bytes": 0x20000})
+    # Combine SRAM_BANK0 + SRAM_BANK1 (if present) for total SRAM.
+    # Some L-series chips use "SRAM" instead of "SRAM_BANK0".
+    sram0 = regions.get(
+        "SRAM_BANK0",
+        regions.get("SRAM", {"origin": "0x20200000", "length": "0x00008000", "length_bytes": 0x8000}),
+    )
+    sram1 = regions.get("SRAM_BANK1", {"origin": "", "length_bytes": 0})
+    total_sram_bytes = sram0["length_bytes"] + sram1["length_bytes"]
+    total_sram_hex = f"0x{total_sram_bytes:08X}"
+
+    return {
+        "flash_origin": flash["origin"],
+        "flash_length": flash["length"],
+        "flash_kb": flash["length_bytes"] // 1024,
+        "sram_origin": sram0["origin"],
+        "sram_length": total_sram_hex,
+        "sram_kb": total_sram_bytes // 1024,
+        "_lds_source": lds_path,
+    }
+
+
+def _generate_minimal_lds(mem: dict, device: str) -> str:
+    """Generate a minimal GCC linker script from resolved memory layout.
+
+    Used as a last resort when no pre-built .lds is available in the SDK.
+    """
+    return textwrap.dedent(f"""\
+        MEMORY
+        {{
+            FLASH (RX)  : ORIGIN = {mem["flash_origin"]}, LENGTH = {mem["flash_length"]}
+            SRAM  (RWX) : ORIGIN = {mem["sram_origin"]}, LENGTH = {mem["sram_length"]}
+        }}
+
+        _estack = {mem["sram_origin"]} + {mem["sram_length"]};
+
+        SECTIONS
+        {{
+            .vectors :
+            {{
+                KEEP(*(.vectors))
+            }} > FLASH
+
+            .text :
+            {{
+                *(.text*)
+                *(.rodata*)
+            }} > FLASH
+
+            .data : AT(LOADADDR(.text) + SIZEOF(.text))
+            {{
+                _data_start = .;
+                *(.data*)
+                _data_end = .;
+            }} > SRAM
+
+            .bss :
+            {{
+                _bss_start = .;
+                *(.bss*)
+                *(COMMON)
+                _bss_end = .;
+            }} > SRAM
+        }}
+    """)
+
 
 # Debugger OpenOCD config mapping
 DEBUGGER_CONFIG = {
@@ -300,6 +552,9 @@ DEBUGGER_CONFIG = {
     },
     "xds110": {
         "configFiles": ["interface/xds110.cfg", "target/ti_mspm0.cfg"],
+    },
+    "jlink": {
+        "configFiles": ["interface/jlink.cfg", "target/ti_mspm0.cfg"],
     },
 }
 
@@ -338,93 +593,238 @@ def error(msg: str):
 # =============================================================================
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="TI MSPM0 one-click project init",
+        description="TI MSPM0 一键嵌入式项目初始化工具 — 从 SysConfig 配置自动生成完整项目",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=textwrap.dedent("""\
-            Examples:
-              %(prog)s new -n blinky                  (auto-discovers .syscfg in current dir)
-              %(prog)s new myboard.syscfg -n uart_echo -d xds110
-              %(prog)s new --device MSPM0G3507 --package "LQFP-48(PT)" -n bare
-              %(prog)s regenerate                     (inside project dir)
-              %(prog)s regenerate /path/to/project
-        """),
+        epilog=_build_help_epilog(),
     )
 
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Check development environment and report tool status",
+        help="自检开发环境：检查 arm-gcc、CMake、SysConfig、SDK、OpenOCD 等工具链是否就绪",
     )
 
-    sub = parser.add_subparsers(dest="command", help="Subcommands")
+    sub = parser.add_subparsers(dest="command", help="子命令（可省略，工具会自动判断上下文）")
 
     # ---- subcommand: new ----
-    p_new = sub.add_parser("new", help="Create a new MSPM0 project")
+    p_new = sub.add_parser(
+        "new",
+        help="创建新的 MSPM0 项目",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=textwrap.dedent("""\
+            使用示例:
+              # 自动发现当前目录的 .syscfg
+              %(prog)s -n my_project
+
+              # 指定 .syscfg 文件 + XDS110 调试器
+              %(prog)s myboard.syscfg -n uart_echo -d xds110
+
+              # 无 .syscfg，纯裸机起点（SDK 自动发现芯片参数）
+              %(prog)s --device MSPM0G3519 --package "LQFP-100(PZ)" -n my_project
+
+              # JLink 调试器
+              %(prog)s -n my_project -d jlink
+
+              # 预览模式：只看不建
+              %(prog)s -n test_proj --dry-run
+        """),
+    )
     p_new.add_argument(
         "syscfg",
         nargs="?",
-        help="SysConfig project file (.syscfg). Auto-discovered from current dir if omitted.",
+        help="SysConfig 项目文件 (.syscfg)。省略时自动从当前目录发现",
     )
-    p_new.add_argument("-n", "--name", required=True, help="Project name (CMake project name)")
-    p_new.add_argument("-o", "--output", default=None, help="Output directory (default: ./<name>/)")
-    p_new.add_argument("-s", "--sdk", default=DEFAULT_SDK_DIR, help=f"MSPM0 SDK path (default: {DEFAULT_SDK_DIR})")
-    p_new.add_argument("--sysconfig", default=DEFAULT_SYSCONFIG_DIR, help=f"SysConfig install dir (default: {DEFAULT_SYSCONFIG_DIR})")
-    p_new.add_argument("-d", "--debugger", choices=["cmsis-dap", "xds110", "none"], default="cmsis-dap", help="Debugger type (default: cmsis-dap)")
-    p_new.add_argument("--device", default=None, help="Specify chip model manually (e.g. MSPM0G3507)")
-    p_new.add_argument("--package", default=None, help="Specify package manually (e.g. LQFP-48(PT))")
+    p_new.add_argument("-n", "--name", required=True, help="项目名称 (CMake project name)")
+    p_new.add_argument("-o", "--output", default=None, help="输出目录（默认 ./<项目名>/）")
+    p_new.add_argument("-s", "--sdk", default=DEFAULT_SDK_DIR, help=f"MSPM0 SDK 路径 (默认: {DEFAULT_SDK_DIR})")
+    p_new.add_argument("--sysconfig", default=DEFAULT_SYSCONFIG_DIR, help=f"SysConfig 安装目录 (默认: {DEFAULT_SYSCONFIG_DIR})")
+    p_new.add_argument("-d", "--debugger", choices=["cmsis-dap", "xds110", "jlink", "none"], default="cmsis-dap", help="调试器类型：cmsis-dap (默认), xds110, jlink, none")
+    p_new.add_argument("--device", default=None, help="手动指定芯片型号（如 MSPM0G3507）。SDK 支持的任意型号均可，无需硬编码")
+    p_new.add_argument("--package", default=None, help="手动指定封装（如 LQFP-48(PT)）")
     p_new.add_argument(
-        "--openocd",
-        "--openocd-path",
-        dest="openocd",
-        default=None,
-        help="OpenOCD executable or directory; overrides auto-search",
+        "--openocd", "--openocd-path",
+        dest="openocd", default=None,
+        help="OpenOCD 可执行文件或目录；覆盖自动搜索（通常无需设置）",
     )
     p_new.add_argument(
-        "--gdb",
-        "--gdb-path",
-        dest="gdb",
-        default=None,
-        help="arm-none-eabi-gdb executable or directory; overrides auto-search",
+        "--gdb", "--gdb-path",
+        dest="gdb", default=None,
+        help="arm-none-eabi-gdb 可执行文件或目录；覆盖自动搜索（通常无需设置）",
     )
-    p_new.add_argument("--dry-run", action="store_true", help="Show operations without creating files")
-    p_new.add_argument("--no-build", action="store_true", help="Skip final cmake configure + build")
+    p_new.add_argument("--dry-run", action="store_true", help="预览模式：仅显示操作，不创建文件")
+    p_new.add_argument("--no-build", action="store_true", help="跳过 cmake configure + build 验证")
 
     # ---- subcommand: regenerate ----
-    p_regen = sub.add_parser("regenerate", help="Regenerate SysConfig files for an existing project")
-    p_regen.add_argument("project_dir", nargs="?", default=".", help="Project directory (default: current dir)")
-    p_regen.add_argument("-s", "--sdk", default=DEFAULT_SDK_DIR, help=f"MSPM0 SDK path")
-    p_regen.add_argument("--sysconfig", default=DEFAULT_SYSCONFIG_DIR, help=f"SysConfig install dir")
+    p_regen = sub.add_parser(
+        "regenerate",
+        help="为已有项目重新运行 SysConfig 生成代码",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=textwrap.dedent("""\
+            使用示例:
+              # 在项目目录内直接运行
+              %(prog)s
+
+              # 指定项目路径
+              %(prog)s /path/to/project
+
+              # 跳过构建验证
+              %(prog)s --no-build
+
+              修改 .syscfg 引脚/外设配置后运行此命令，自动重新生成配置文件。
+              手写的 src/ 目录代码不会被修改。旧文件备份到 .sysconfig_backup/。
+        """),
+    )
+    p_regen.add_argument("project_dir", nargs="?", default=".", help="项目目录（默认当前目录）")
+    p_regen.add_argument("-s", "--sdk", default=DEFAULT_SDK_DIR, help=f"MSPM0 SDK 路径")
+    p_regen.add_argument("--sysconfig", default=DEFAULT_SYSCONFIG_DIR, help=f"SysConfig 安装目录")
     p_regen.add_argument(
-        "--openocd",
-        "--openocd-path",
-        dest="openocd",
-        default=None,
-        help="OpenOCD executable or directory; overrides auto-search",
+        "--openocd", "--openocd-path",
+        dest="openocd", default=None,
+        help="OpenOCD 可执行文件或目录",
     )
     p_regen.add_argument(
-        "--gdb",
-        "--gdb-path",
-        dest="gdb",
-        default=None,
-        help="arm-none-eabi-gdb executable or directory; overrides auto-search",
+        "--gdb", "--gdb-path",
+        dest="gdb", default=None,
+        help="arm-none-eabi-gdb 可执行文件或目录",
     )
     p_regen.add_argument(
         "-d", "--debugger",
-        choices=["cmsis-dap", "xds110", "none"],
+        choices=["cmsis-dap", "xds110", "jlink", "none"],
         default="cmsis-dap",
-        help="Debugger type for VSCode configs (default: cmsis-dap)",
+        help="调试器类型：cmsis-dap (默认), xds110, jlink, none",
     )
-    p_regen.add_argument("--no-build", action="store_true", help="Skip rebuild after regeneration")
-    p_regen.add_argument("--backup", action="store_true", default=True, help="Backup old generated files before overwriting (default: on)")
-    p_regen.add_argument("--no-backup", action="store_false", dest="backup", help="Don't backup old files")
-    p_regen.add_argument("--dry-run", action="store_true", help="Show operations without creating files")
+    p_regen.add_argument("--no-build", action="store_true", help="跳过重编译验证")
+    p_regen.add_argument("--backup", action="store_true", default=True, help="覆盖前备份旧文件到 .sysconfig_backup/ (默认开启)")
+    p_regen.add_argument("--no-backup", action="store_false", dest="backup", help="禁用备份")
+    p_regen.add_argument("--dry-run", action="store_true", help="预览模式")
 
     # ---- subcommand: check ----
-    sub.add_parser("check", help="Check development environment for required tools")
+    sub.add_parser(
+        "check",
+        help="自检开发环境：检查 arm-gcc、CMake、Ninja、SysConfig、SDK、OpenOCD 等",
+    )
 
-    # Backward compat: if no subcommand given, default to 'new'
-    # argparse will error without a subcommand; we handle this in main()
     return parser.parse_args()
+
+
+def _build_help_epilog() -> str:
+    """Build the comprehensive help epilog used by the top-level --help."""
+    return textwrap.dedent(f"""\
+    ══════════════════════════════════════════════════════════════════════════════
+                              MSPM0-INIT  完整使用教程
+    ══════════════════════════════════════════════════════════════════════════════
+
+    ── 快速开始 ─────────────────────────────────────────────────────────────────
+
+      1. 用 TI SysConfig GUI 配好芯片、引脚和外设，保存 .syscfg 到一个空目录
+      2. 在该目录下运行:
+           mspm0-init
+      3. 构建:
+           cmake --build build -j$(nproc)
+      4. VSCode 调试:
+           code .
+           F5 → 选择 CMSIS-DAP / XDS110 / JLink
+
+    ── 子命令 ───────────────────────────────────────────────────────────────────
+
+      mspm0-init                 无参数：自动检测上下文
+                                   - 目录有 .syscfg + CMakeLists.txt → 自动 regenerate
+                                   - 目录仅有 .syscfg → 自动以文件名创建项目
+                                   - 目录为空 → 显示帮助
+      mspm0-init new             创建新项目
+      mspm0-init regenerate      重新生成 SysConfig 配置（保留手写代码）
+      mspm0-init check           环境自检
+      mspm0-init --check         环境自检（全局参数，位置无关）
+
+    ── 调试器选项 (-d) ─────────────────────────────────────────────────────────
+
+      -d cmsis-dap    板载 CMSIS-DAP 调试器（LaunchPad 默认）
+      -d xds110       TI XDS110 调试器
+      -d jlink        SEGGER J-Link 调试器（需 TI 定制版 OpenOCD）
+      -d none         不生成调试配置
+
+      JLink 注意：当前 TI SDK 附带的 OpenOCD 已包含 interface/jlink.cfg，
+      直接 -d jlink 即可使用。如使用 Segger 官方 JLink GDB Server，需手动修改
+      生成的 .vscode/launch.json。
+
+    ── 芯片型号 (--device) ──────────────────────────────────────────────────────
+
+      支持 SDK (DeviceFamily.h) 中收录的全部 58 款 MSPM0 芯片，无需硬编码:
+        MSPM0G系列: G1105~G1107, G1207, G1218, G1505~G1507, G1518~G1519,
+                    G3105~G3107, G3207, G3218, G3505~G3507, G3518~G3519,
+                    G3529, G5115~G5117, G5187
+        MSPM0L系列: L1105~L1106, L1116~L1117, L1126~L1127, L1226~L1228,
+                    L1303~L1306, L1343~L1346, L2116~L2117, L2226~L2228
+        MSPM0C系列: C1103~C1106
+        MSPM0H系列: H3215~H3216
+        MSP32系列:  G031C6~G031C8, C031C6
+        MSPS系列:   003F3~003F4
+
+      从 .syscfg 自动获取时无需关心型号。手动指定时用 --device。
+      工具会自动从 SDK 中匹配 startup 文件、driverlib 和内存布局。
+
+    ── 环境变量（全部可选）─────────────────────────────────────────────────────
+
+      MSPM0_SDK        MSPM0 SDK 根目录  (默认: ~/ti/mspm0_sdk_*/)
+      SYSCONFIG_DIR    SysConfig 安装目录 (默认: ~/ti/sysconfig_*/)
+      TI_ROOT          TI 工具根目录      (Linux: ~/ti, Windows: C:\\ti)
+      OPENOCD_DIR      OpenOCD 目录或可执行文件
+      GDB_DIR          arm-none-eabi-gdb 目录
+
+      推荐在 ~/.zshrc 或 ~/.bashrc 中配置:
+        export MSPM0_SDK=~/ti/mspm0_sdk_2_10_00_04
+        export SYSCONFIG_DIR=~/ti/sysconfig_1.27.1
+
+    ── 使用技巧 ─────────────────────────────────────────────────────────────────
+
+      • 在空目录中放置 .syscfg 后直接 mspm0-init，无需记住任何参数
+      • 修改引脚/外设后运行 mspm0-init regenerate，手写代码安全无虞
+      • --dry-run 预览模式先看看会生成什么，确认后再正式运行
+      • --no-build 跳过构建验证，适合还未安装完整工具链时预览
+      • 旧项目先 mspm0-init check 诊断环境，再逐步修复
+      • regenerate 默认会自动备份旧文件到 .sysconfig_backup/
+      • 生成的 .vscode/ 配置可直接用于 VSCode + Cortex-Debug 插件
+      • Windows 用户: TI 工具需安装在 C:\\ti\\，或设置对应的环境变量
+
+    ── 生成的项目结构 ───────────────────────────────────────────────────────────
+      my_project/
+      ├── CMakeLists.txt              # CMake 构建定义
+      ├── my_project.syscfg           # 原始 SysConfig 配置
+      ├── config/
+      │   ├── ti_msp_dl_config.h      # 自动生成 — 请勿手动编辑
+      │   ├── ti_msp_dl_config.c      # 自动生成 — 请勿手动编辑
+      │   ├── device_linker.lds       # 链接脚本
+      │   └── device.opt              # 编译选项
+      ├── inc/
+      │   ├── main.h                  # 应用头文件
+      │   ├── app/                    # 应用层头文件
+      │   ├── driver/                 # 驱动头文件
+      │   ├── modules/                # 功能模块头文件
+      │   └── utils/                  # 工具头文件
+      ├── src/
+      │   ├── main.c                  # 应用入口（在此写代码）
+      │   ├── app/                    # 应用层实现
+      │   ├── driver/                 # 驱动实现
+      │   ├── modules/                # 功能模块实现
+      │   └── utils/                  # 工具实现
+      ├── lib/                        # 本地静态库
+      ├── excluded/                   # 不参与编译的 SysConfig 产物
+      ├── build/                      # 构建输出 (ELF/HEX/BIN/MAP)
+      └── .vscode/
+            ├── launch.json           # 调试器配置
+            ├── tasks.json            # 构建任务
+            └── c_cpp_properties.json # IntelliSense 配置
+
+    ── 手动烧录 (OpenOCD) ───────────────────────────────────────────────────────
+      openocd -f interface/cmsis-dap.cfg -f target/ti_mspm0.cfg \\
+        -c "program build/project.elf verify reset exit"
+
+      # JLink
+      openocd -f interface/jlink.cfg -f target/ti_mspm0.cfg \\
+        -c "program build/project.elf verify reset exit"
+
+    ══════════════════════════════════════════════════════════════════════════════
+    """)
 
 
 # =============================================================================
@@ -770,8 +1170,15 @@ SYSCONFIG_WEAK void SYSCFG_DL_init(void)
 """
 
 
-def write_dl_config_stubs(out_dir: str, device: str, dry_run: bool = False):
-    """Generate minimal ti_msp_dl_config.c/h when SysConfig doesn't."""
+def write_dl_config_stubs(out_dir: str, device: str, sdk_dir: str = "", dry_run: bool = False):
+    """Generate minimal ti_msp_dl_config.c/h when SysConfig doesn't.
+
+    Writes flat into out_dir (SysConfig temp dir) — distribute_files()
+    will route them to config/ in the project tree.
+
+    Also copies the SDK pre-built linker script when available, so that
+    --device mode (no .syscfg) produces a buildable project.
+    """
     h_path = os.path.join(out_dir, "ti_msp_dl_config.h")
     c_path = os.path.join(out_dir, "ti_msp_dl_config.c")
 
@@ -799,49 +1206,89 @@ def write_dl_config_stubs(out_dir: str, device: str, dry_run: bool = False):
                 f.write(DL_CONFIG_C_STUB)
             info("  + ti_msp_dl_config.c (stub — no peripherals configured)")
 
+    # ── Copy SDK linker script for --device mode (no SysConfig) ──
+    if sdk_dir:
+        lds_path = os.path.join(out_dir, "device_linker.lds")
+        opt_path = os.path.join(out_dir, "device.opt")
+        if not os.path.isfile(lds_path):
+            mem = _resolve_memory_from_lds(sdk_dir, device)
+            sdk_lds_src = mem.get("_lds_source", "")
+            if sdk_lds_src and os.path.isfile(sdk_lds_src):
+                if dry_run:
+                    info(f"[dry-run] cp {sdk_lds_src} → device_linker.lds")
+                else:
+                    shutil.copy2(sdk_lds_src, lds_path)
+                    info("  + device_linker.lds (from SDK)")
+            else:
+                # Fallback: generate a minimal linker script from resolved memory
+                lds_content = _generate_minimal_lds(mem, device)
+                if dry_run:
+                    info(f"[dry-run] Write device_linker.lds (minimal)")
+                else:
+                    with open(lds_path, "w") as f:
+                        f.write(lds_content)
+                    info("  + device_linker.lds (minimal — verify memory layout)")
+        if not os.path.isfile(opt_path):
+            if dry_run:
+                info(f"[dry-run] Write device.opt (empty)")
+            else:
+                with open(opt_path, "w") as f:
+                    f.write("")
+                info("  + device.opt (empty — no SysConfig flags)")
+
 
 # =============================================================================
-# Step 4: Chip mapping
+# Step 4: Chip mapping — fully dynamic via SDK introspection
 # =============================================================================
 def resolve_chip(device: str, sdk_dir: str) -> dict:
-    """Look up chip in mapping table, return full parameters."""
-    # Normalize device name: MSPM0G350X / MSPM0G3507 -> __MSPM0G3507__
-    # Strip trailing X, wrap with __
+    """Auto-discover chip parameters from the SDK (no hardcoded table).
+
+    Uses:
+      - DeviceFamily.h to map device→parent (for driverlib grouping)
+      - Startup file directory scan + pattern matching
+      - Pre-built linker scripts in linker_files/gcc/ for memory layout
+      - macros.tirex.json as fallback for driverlib/lds edge cases
+    """
     normalized = device.upper().rstrip("X")
-    key = f"__{normalized}__"
+    device_define = f"__{normalized}__"
 
-    if key in CHIP_MAP:
-        chip = CHIP_MAP[key].copy()
-        chip["device_define"] = key
-        chip["device_name"] = normalized
-        return chip
+    # 1. Parse DeviceFamily.h → get parent family name
+    device_to_parent = _parse_device_family_h(sdk_dir)
+    parent_name = device_to_parent.get(device_define, "")
 
-    # Fuzzy match: try G350x-series fallback when exact key missing
-    # e.g. __MSPM0G3501__ -> fallback to G3507 config
-    for known_key, known_chip in CHIP_MAP.items():
-        # Extract series prefix: __MSPM0G3507__ -> MSPM0G350
-        base = re.sub(r"\d+__$", "", known_key)  # strip trailing digits
-        if key.startswith(base):
-            warn(f"Chip {device} has no exact mapping, reusing {known_key} config")
-            chip = known_chip.copy()
-            chip["device_define"] = key
-            chip["device_name"] = normalized
-            return chip
+    if not parent_name:
+        warn(f"Chip {device} not found in DeviceFamily.h, using generic defaults")
 
-    # Last resort: construct reasonable defaults
-    warn(f"Chip {device} not in known map, using generic Cortex-M0+ defaults")
+    # 2. Match startup file
+    startup_index = _build_startup_index(sdk_dir)
+    startup = _match_startup(device, startup_index)
+
+    if not startup:
+        warn(f"No startup file matched for {device}, using best-guess path")
+        startup = (
+            f"ti/devices/msp/m0p/startup_system_files/gcc/"
+            f"startup_{normalized.lower()}_gcc.c"
+        )
+
+    # 3. Resolve driverlib
+    driverlib = _resolve_driverlib(sdk_dir, device, parent_name)
+
+    # 4. Resolve memory layout from pre-built linker script
+    memory = _resolve_memory_from_lds(sdk_dir, device)
+
     return {
         "cpu": "cortex-m0plus",
-        "startup": f"ti/devices/msp/m0p/startup_system_files/gcc/startup_{normalized.lower()}_gcc.c",
-        "driverlib": "ti/driverlib/lib/gcc/m0p/mspm0g1x0x_g3x0x/driverlib.a",
-        "flash_kb": 128,
-        "sram_kb": 32,
-        "flash_origin": "0x00000000",
-        "flash_length": "0x00020000",
-        "sram_origin": "0x20200000",
-        "sram_length": "0x00008000",
-        "device_define": key,
+        "startup": startup,
+        "driverlib": driverlib,
+        "flash_kb": memory["flash_kb"],
+        "sram_kb": memory["sram_kb"],
+        "flash_origin": memory["flash_origin"],
+        "flash_length": memory["flash_length"],
+        "sram_origin": memory["sram_origin"],
+        "sram_length": memory["sram_length"],
+        "device_define": device_define,
         "device_name": normalized,
+        "package_options": [],
     }
 
 
@@ -849,8 +1296,15 @@ def resolve_chip(device: str, sdk_dir: str) -> dict:
 # Step 5: Create project directory structure
 # =============================================================================
 DIRS = [
+    "config",
+    "inc/app",
     "inc/driver",
+    "inc/modules",
+    "inc/utils",
+    "src/app",
     "src/driver",
+    "src/modules",
+    "src/utils",
     "lib",
     "excluded",
     ".vscode",
@@ -874,10 +1328,10 @@ def create_directories(project_dir: str, dry_run: bool = False):
 # =============================================================================
 FILE_ROUTING = {
     # SysConfig output -> project location
-    "ti_msp_dl_config.h":  "{project}",
-    "ti_msp_dl_config.c":  "{project}",
-    "device_linker.lds":   "{project}",
-    "device.opt":          "{project}",
+    "ti_msp_dl_config.h":  "{project}/config",
+    "ti_msp_dl_config.c":  "{project}/config",
+    "device_linker.lds":   "{project}/config",
+    "device.opt":          "{project}/config",
     "device_linker.cmd":   "{project}/excluded",
     "device.cmd.genlibs":  "{project}/excluded",
     "device.lds.genlibs":  "{project}/excluded",
@@ -953,23 +1407,34 @@ CMAKE_TEMPLATE = textwrap.dedent("""\
 
     # ===== Link options =====
     add_link_options(${{MCU_FLAGS}})
-    add_link_options(-T ${{CMAKE_SOURCE_DIR}}/device_linker.lds)
+    add_link_options(-T ${{CMAKE_SOURCE_DIR}}/config/device_linker.lds)
     add_link_options(-Wl,-Map=${{PROJECT_BINARY_DIR}}/${{PROJECT_NAME}}.map,--cref)
     add_link_options(-Wl,--gc-sections)
     add_link_options(--specs=nosys.specs -nostartfiles)
 
+    # ===== Source files (auto-discover from src/ directories) =====
+    file(GLOB_RECURSE PROJECT_SOURCES
+        "src/*.c"
+        "src/*.s"
+        "src/*.S"
+    )
+
     # ===== Executable =====
     add_executable(${{PROJECT_NAME}}
-        src/main.c
-        ti_msp_dl_config.c
+        ${{PROJECT_SOURCES}}
+        config/ti_msp_dl_config.c
         ${{SDK_DIR}}/{startup_path}
     )
 
     # ===== Include paths =====
     target_include_directories(${{PROJECT_NAME}} PRIVATE
         ${{CMAKE_SOURCE_DIR}}
+        ${{CMAKE_SOURCE_DIR}}/config
         ${{CMAKE_SOURCE_DIR}}/inc
+        ${{CMAKE_SOURCE_DIR}}/inc/app
         ${{CMAKE_SOURCE_DIR}}/inc/driver
+        ${{CMAKE_SOURCE_DIR}}/inc/modules
+        ${{CMAKE_SOURCE_DIR}}/inc/utils
         ${{SDK_DIR}}
         ${{SDK_DIR}}/third_party/CMSIS/Core/Include
     )
@@ -1140,6 +1605,12 @@ CPP_PROPERTIES_TEMPLATE = """\
             ],
             "includePath": [
                 "${{workspaceFolder}}/**",
+                "${{workspaceFolder}}/config",
+                "${{workspaceFolder}}/inc",
+                "${{workspaceFolder}}/inc/app",
+                "${{workspaceFolder}}/inc/driver",
+                "${{workspaceFolder}}/inc/modules",
+                "${{workspaceFolder}}/inc/utils",
                 "{sdk_dir}/source",
                 "{sdk_dir}/source/third_party/CMSIS/Core/Include"
             ],
@@ -1229,7 +1700,7 @@ def write_launch_json(project_dir: str, ctx: dict, dry_run: bool = False):
     config_files = ",\n                ".join(
         f'"{f}"' for f in dbg_cfg["configFiles"]
     )
-    debugger_label = "CMSIS-DAP" if debugger == "cmsis-dap" else "XDS110"
+    debugger_label = {"cmsis-dap": "CMSIS-DAP", "xds110": "XDS110", "jlink": "JLink"}.get(debugger, debugger.upper())
 
     openocd_bin = _posix_path(ctx["openocd_exe"])
     openocd_scripts = _posix_path(ctx.get("openocd_scripts", ""))
@@ -1480,7 +1951,7 @@ def cmd_new(args):
 
     # Ensure ti_msp_dl_config.c/h exist (generate stubs if SysConfig skipped them)
     if not args.dry_run:
-        write_dl_config_stubs(sysconfig_tmp, device or args.device or "MSPM0G3507", args.dry_run)
+        write_dl_config_stubs(sysconfig_tmp, device or args.device or "MSPM0G3507", args.sdk, args.dry_run)
 
     # -- Step 4: Parse generated headers --
     info("--- Step 4: Parse metadata ---")
@@ -1587,10 +2058,10 @@ def cmd_regenerate(args):
 
     # ---- Backup existing generated files ----
     GENERATED_FILES = [
-        "ti_msp_dl_config.h",
-        "ti_msp_dl_config.c",
-        "device_linker.lds",
-        "device.opt",
+        "config/ti_msp_dl_config.h",
+        "config/ti_msp_dl_config.c",
+        "config/device_linker.lds",
+        "config/device.opt",
     ]
 
     if args.backup and not args.dry_run:
@@ -1623,12 +2094,14 @@ def cmd_regenerate(args):
     info("--- Updating project files ---")
     updated = []
     for f in GENERATED_FILES:
-        src = os.path.join(tmp_out, f)
+        basename = os.path.basename(f)
+        src = os.path.join(tmp_out, basename)
         dst = os.path.join(project_dir, f)
         if os.path.isfile(src):
             if args.dry_run:
                 info(f"  [dry-run] {f} -> {dst}")
             else:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.copy2(src, dst)
             updated.append(f)
 
@@ -1653,7 +2126,7 @@ def cmd_regenerate(args):
     success(f"Updated {len(updated)} file(s): {', '.join(updated)}")
 
     # ---- Parse new metadata ----
-    dl_config_h = os.path.join(project_dir, "ti_msp_dl_config.h")
+    dl_config_h = os.path.join(project_dir, "config", "ti_msp_dl_config.h")
     dl_meta = parse_dl_config(dl_config_h)
     chip = resolve_chip(device, args.sdk)
 
@@ -1765,14 +2238,19 @@ def main():
             sys.argv = [sys.argv[0], "new", str(has_syscfg[0]), "-n", name, "-o", str(cwd)]
             cmd_new(parse_args())
         else:
-            print("\nUsage: mspm0-init <subcommand> [options]\n")
-            print("Subcommands:")
-            print("  new           Create a new MSPM0 project")
-            print("  regenerate    Re-run SysConfig for an existing project")
-            print("\nExamples:")
-            print("  mspm0-init                         (auto-detect in current dir)")
-            print("  mspm0-init new -n my_project       (auto-discovers .syscfg)")
-            print("  mspm0-init regenerate              (inside a project dir)")
+            print("\n用法: mspm0-init [子命令] [选项]")
+            print()
+            print("子命令:")
+            print("  new          创建新项目")
+            print("  regenerate   重新生成 SysConfig 配置")
+            print("  check        环境自检")
+            print()
+            print("快速开始:")
+            print("  mspm0-init                         (自动检测当前目录)")
+            print("  mspm0-init new -n my_project       (自动发现 .syscfg)")
+            print("  mspm0-init regenerate              (项目内重生成)")
+            print()
+            print("完整教程: mspm0-init --help")
             sys.exit(0)
 
 
