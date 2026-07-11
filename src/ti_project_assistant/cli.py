@@ -2053,7 +2053,7 @@ def print_summary(ctx: dict):
 # =============================================================================
 def cmd_new(args):
     print(f"\n{Color.BOLD}{Color.CYAN}╔════════════════════════════════════╗")
-    print(f"║   MSPM0 Project Init v0.3.0       ║")
+    print(f"║   MSPM0 Project Init v0.3.1       ║")
     print(f"╚════════════════════════════════════╝{Color.RESET}\n")
 
     # ── Step 1: Auto-discover syscfg if not provided ──
