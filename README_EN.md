@@ -33,7 +33,7 @@ cmake --build build -j$(nproc)
 
 # 3. Debug (VSCode)
 code .
-# Press F5 → choose CMSIS-DAP or XDS110
+# Press F5 → choose CMSIS-DAP, XDS110, or JLink
 ```
 
 After modifying config:
@@ -55,9 +55,9 @@ mspm0-init regenerate    # Only generated files are updated. Your src/ code is s
 The script automates:
 
 - Invokes SysConfig CLI to generate `ti_msp_dl_config.c/h`, linker script
-- Parses chip model, auto-maps SDK startup files and driverlib
-- Creates standard project directory structure
-- Generates `CMakeLists.txt` (arm-none-eabi-gcc toolchain)
+- Dynamically resolves **all 58 MSPM0 chips** from the SDK at runtime (startup files, driverlib, memory layout — all auto-discovered, no hardcoding)
+- Creates a layered project directory structure (`config/`, `src/app/`, `src/modules/`, `src/utils/`)
+- Generates `CMakeLists.txt` with `file(GLOB_RECURSE)` for automatic source discovery (arm-none-eabi-gcc toolchain)
 - Generates `.vscode/` configs (`launch.json` / `tasks.json` / `c_cpp_properties.json`)
 - Auto cmake configure + build verification
 
@@ -166,7 +166,7 @@ mspm0-init new [syscfg] -n NAME [options]
   -o, --output DIR       Output directory (default: ./<name>/)
   -s, --sdk PATH         MSPM0 SDK path
   --sysconfig PATH       SysConfig install dir
-  -d, --debugger TYPE    cmsis-dap (default) | xds110 | none
+  -d, --debugger TYPE    cmsis-dap (default) | xds110 | jlink | none
   --device DEVICE        Specify chip manually, e.g. MSPM0G3507
   --package PACKAGE      Specify package, e.g. LQFP-48(PT)
   --dry-run              Preview only, don't create files
@@ -187,20 +187,28 @@ mspm0-init regenerate [project_dir] [options]
 my_project/
 ├── CMakeLists.txt              # Build definition
 ├── my_project.syscfg           # Original SysConfig config
-├── ti_msp_dl_config.h          # Auto-generated — DO NOT EDIT
-├── ti_msp_dl_config.c          # Auto-generated — DO NOT EDIT
-├── device_linker.lds           # Linker script
+├── config/
+│   ├── ti_msp_dl_config.h      # Auto-generated — DO NOT EDIT
+│   ├── ti_msp_dl_config.c      # Auto-generated — DO NOT EDIT
+│   ├── device_linker.lds       # Linker script
+│   └── device.opt              # Compiler options
 ├── inc/
-│   ├── main.h
-│   └── driver/                 # Your driver headers
+│   ├── main.h                  # Application header
+│   ├── app/                    # Application-layer headers
+│   ├── driver/                 # Driver headers
+│   ├── modules/                # Module headers
+│   └── utils/                  # Utility headers
 ├── src/
-│   ├── main.c                  # Application entry
-│   └── driver/                 # Your driver sources
+│   ├── main.c                  # Application entry (write code here)
+│   ├── app/                    # Application-layer sources
+│   ├── driver/                 # Driver sources
+│   ├── modules/                # Module sources
+│   └── utils/                  # Utility sources
 ├── lib/                        # Local static libraries
 ├── excluded/                   # Build-excluded SysConfig artifacts
 ├── build/                      # Build output (ELF, HEX, BIN, MAP)
 └── .vscode/
-    ├── launch.json             # Debug config (CMSIS-DAP / XDS110)
+    ├── launch.json             # Debug config (CMSIS-DAP / XDS110 / JLink)
     ├── tasks.json              # Build tasks
     └── c_cpp_properties.json   # IntelliSense config
 ```
@@ -209,11 +217,24 @@ my_project/
 
 ## Supported Chips
 
-[![MSPM0G3507](https://img.shields.io/badge/MSPM0G3507-128KB%20Flash%20%7C%2032KB%20SRAM-red)](https://www.ti.com/product/MSPM0G3507)
-[![MSPM0G3505](https://img.shields.io/badge/MSPM0G3505-64KB%20Flash%20%7C%2016KB%20SRAM-red)](https://www.ti.com/product/MSPM0G3505)
-[![MSPM0L1306](https://img.shields.io/badge/MSPM0L1306-64KB%20Flash%20%7C%208KB%20SRAM-red)](https://www.ti.com/product/MSPM0L1306)
+**All 58 MSPM0 devices in the SDK work out of the box.** No manual chip entries needed.
 
-Add an entry to `CHIP_MAP` in the script to support more chips.
+The tool discovers chip parameters at runtime by parsing the SDK's `DeviceFamily.h`, scanning startup file directories, reading pre-built linker scripts, and falling back to `macros.tirex.json` — including Flash/SRAM layout, startup files, and driverlib paths.
+
+If your chip is in the TI MSPM0 SDK, `mspm0-init` recognizes it automatically.
+
+Supported families include:
+
+| Family | Example devices |
+|--------|----------------|
+| MSPM0Gx5xx | G3507, G3519, G3107, G1507, G1519 … |
+| MSPM0Gx1xx | G1105, G1106 … |
+| MSPM0Lx3xx | L1306, L1345, L2228 … |
+| MSPM0Lx2xx | L1227, L2227, L1228 … |
+| MSPM0Cx1xx | C1105, C1106 … |
+| MSPM0Hx2xx | H3215 … |
+
+[View full SDK device list →](https://www.ti.com/tool/MSPM0-SDK)
 
 ---
 

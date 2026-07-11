@@ -33,7 +33,7 @@ cmake --build build -j$(nproc)
 
 # 3. 调试（VSCode）
 code .
-# 按 F5 → 选择 CMSIS-DAP 或 XDS110
+# 按 F5 → 选择 CMSIS-DAP / XDS110 / JLink
 ```
 
 修改配置后：
@@ -55,9 +55,9 @@ mspm0-init regenerate    # 仅更新生成文件，src/ 下手写代码安全无
 脚本自动完成：
 
 - 调用 SysConfig CLI 生成 `ti_msp_dl_config.c/h`、链接脚本
-- 解析芯片型号，自动映射 SDK 中的启动文件、driverlib 库
-- 创建标准项目目录结构
-- 生成 `CMakeLists.txt`（arm-none-eabi-gcc 工具链）
+- 动态解析 SDK，自动匹配 **全部 58 款 MSPM0** 芯片的启动文件、driverlib、内存布局（无需硬编码）
+- 创建标准分层项目目录结构（`config/`、`src/app/`、`src/modules/`、`src/utils/`）
+- 生成 `CMakeLists.txt`（`file(GLOB_RECURSE)` 递归链接，arm-none-eabi-gcc 工具链）
 - 生成 `.vscode/` 三件套（`launch.json` / `tasks.json` / `c_cpp_properties.json`）
 - 自动 cmake configure + build 验证
 
@@ -166,7 +166,7 @@ mspm0-init new [syscfg] -n NAME [选项]
   -o, --output DIR       输出目录（默认 ./<name>/）
   -s, --sdk PATH         MSPM0 SDK 路径
   --sysconfig PATH       SysConfig 安装目录
-  -d, --debugger TYPE    cmsis-dap（默认）| xds110 | none
+  -d, --debugger TYPE    cmsis-dap（默认）| xds110 | jlink | none
   --device DEVICE        手动指定芯片，如 MSPM0G3507
   --package PACKAGE      手动指定封装，如 LQFP-48(PT)
   --dry-run              预览模式，不创建文件
@@ -187,20 +187,28 @@ mspm0-init regenerate [项目目录] [选项]
 my_project/
 ├── CMakeLists.txt              # CMake 构建定义
 ├── my_project.syscfg           # 原始 SysConfig 配置
-├── ti_msp_dl_config.h          # 自动生成 — 请勿手动编辑
-├── ti_msp_dl_config.c          # 自动生成 — 请勿手动编辑
-├── device_linker.lds           # 链接脚本
+├── config/
+│   ├── ti_msp_dl_config.h      # 自动生成 — 请勿手动编辑
+│   ├── ti_msp_dl_config.c      # 自动生成 — 请勿手动编辑
+│   ├── device_linker.lds       # 链接脚本
+│   └── device.opt              # 编译选项
 ├── inc/
-│   ├── main.h
-│   └── driver/                 # 你的驱动头文件
+│   ├── main.h                  # 应用头文件
+│   ├── app/                    # 应用层头文件
+│   ├── driver/                 # 驱动头文件
+│   ├── modules/                # 功能模块头文件
+│   └── utils/                  # 工具头文件
 ├── src/
-│   ├── main.c                  # 应用入口
-│   └── driver/                 # 你的驱动实现
+│   ├── main.c                  # 应用入口（在此写代码）
+│   ├── app/                    # 应用层实现
+│   ├── driver/                 # 驱动实现
+│   ├── modules/                # 功能模块实现
+│   └── utils/                  # 工具实现
 ├── lib/                        # 本地静态库
 ├── excluded/                   # 不参与编译的 SysConfig 产物
 ├── build/                      # 构建输出（ELF / HEX / BIN / MAP）
 └── .vscode/
-    ├── launch.json             # 调试配置（CMSIS-DAP / XDS110）
+    ├── launch.json             # 调试配置（CMSIS-DAP / XDS110 / JLink）
     ├── tasks.json              # 构建任务
     └── c_cpp_properties.json   # IntelliSense 配置
 ```
@@ -209,11 +217,24 @@ my_project/
 
 ## 支持的芯片
 
-[![MSPM0G3507](https://img.shields.io/badge/MSPM0G3507-128KB%20Flash%20%7C%2032KB%20SRAM-red)](https://www.ti.com/product/MSPM0G3507)
-[![MSPM0G3505](https://img.shields.io/badge/MSPM0G3505-64KB%20Flash%20%7C%2016KB%20SRAM-red)](https://www.ti.com/product/MSPM0G3505)
-[![MSPM0L1306](https://img.shields.io/badge/MSPM0L1306-64KB%20Flash%20%7C%208KB%20SRAM-red)](https://www.ti.com/product/MSPM0L1306)
+**SDK 中的全部 58 款 MSPM0 芯片开箱即用。** 无需手动添加芯片型号。
 
-在脚本的 `CHIP_MAP` 字典中添加新条目即可支持更多芯片。
+工具通过运行时解析 SDK 的 `DeviceFamily.h`、启动文件目录、预编译链接脚本和 `macros.tirex.json` 自动发现芯片参数，包括 Flash/SRAM 布局、启动文件、driverlib 路径等。
+
+只要 TI MSPM0 SDK 支持的芯片，`mspm0-init` 就能自动识别。
+
+支持的系列包括：
+
+| 系列 | 代表型号 |
+|------|---------|
+| MSPM0Gx5xx | G3507, G3519, G3107, G1507, G1519 … |
+| MSPM0Gx1xx | G1105, G1106 … |
+| MSPM0Lx3xx | L1306, L1345, L2228 … |
+| MSPM0Lx2xx | L1227, L2227, L1228 … |
+| MSPM0Cx1xx | C1105, C1106 … |
+| MSPM0Hx2xx | H3215 … |
+
+[查看 SDK 完整设备列表 →](https://www.ti.com/tool/MSPM0-SDK)
 
 ---
 
