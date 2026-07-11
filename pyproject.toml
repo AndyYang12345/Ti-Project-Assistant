@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ti-project-assistant"
-version = "0.2.2"
+version = "0.2.3"
 description = "TI MSPM0 one-click project init tool — bootstrap embedded projects from SysConfig"
 readme = "README.md"
 license = {file = "LICENSE"}

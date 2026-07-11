@@ -1638,6 +1638,26 @@ TASKS_JSON_TEMPLATE = """\
                 "reveal": "silent",
                 "panel": "shared"
             }
+        },
+        {
+            "label": "Flash MSPM0",
+            "detail": "Flash firmware to device without entering debug mode",
+            "type": "shell",
+            "command": "___OPENOCD_EXE___",
+            "args": [
+                "-s", "___OPENOCD_SCRIPTS___",
+                "-f", "___FLASH_INTERFACE___",
+                "-f", "target/ti_mspm0.cfg",
+                "-c", "program build/___PROJECT_NAME___.elf verify reset exit"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
         }
     ]
 }"""
@@ -1654,6 +1674,11 @@ VSCode_SETTINGS_TEMPLATE = """\
             "label": "$(play) Build",
             "task": "Build MSPM0 project",
             "tooltip": "编译 MSPM0 项目 (cmake --build)"
+        },
+        {
+            "label": "$(zap) Flash",
+            "task": "Flash MSPM0",
+            "tooltip": "烧录固件到芯片 (不进入调试模式)"
         },
         {
             "label": "$(trash) Clean",
@@ -1783,7 +1808,10 @@ def write_main_h(project_dir: str, ctx: dict, dry_run: bool = False):
     info("  ✓ inc/main.h")
 
 
-def write_tasks_json(project_dir: str, sysconfig_cli: str = "", syscfg_name: str = "", dry_run: bool = False):
+def write_tasks_json(project_dir: str, sysconfig_cli: str = "", syscfg_name: str = "",
+                     openocd_exe: str = "openocd", openocd_scripts: str = "",
+                     debugger: str = "cmsis-dap", project_name: str = "",
+                     dry_run: bool = False):
     """Generate .vscode/tasks.json."""
     dest = os.path.join(project_dir, ".vscode", "tasks.json")
     if dry_run:
@@ -1792,10 +1820,19 @@ def write_tasks_json(project_dir: str, sysconfig_cli: str = "", syscfg_name: str
     sysconfig_dir = os.path.dirname(sysconfig_cli)
     nw_bin = os.path.join(sysconfig_dir, "nw", _SYSCONFIG_NW_NAME)
     app_dir = os.path.join(sysconfig_dir, "app")
+    flash_interface = {
+        "cmsis-dap": "interface/cmsis-dap.cfg",
+        "xds110": "interface/xds110.cfg",
+        "jlink": "interface/jlink.cfg",
+    }.get(debugger, "interface/cmsis-dap.cfg")
     content = TASKS_JSON_TEMPLATE.replace("___CMAKE_GENERATOR___", _CMAKE_GENERATOR)
     content = content.replace("___SYSCONFIG_NW___", nw_bin)
     content = content.replace("___SYSCONFIG_APP___", app_dir)
     content = content.replace("___SYSCFG_FILE___", syscfg_name)
+    content = content.replace("___OPENOCD_EXE___", openocd_exe)
+    content = content.replace("___OPENOCD_SCRIPTS___", openocd_scripts)
+    content = content.replace("___FLASH_INTERFACE___", flash_interface)
+    content = content.replace("___PROJECT_NAME___", project_name)
     with open(dest, "w") as f:
         f.write(content)
     info("  ✓ .vscode/tasks.json")
@@ -2125,6 +2162,10 @@ def cmd_new(args):
     write_tasks_json(project_dir,
                      sysconfig_cli=args._sysconfig_cli,
                      syscfg_name=os.path.basename(args.syscfg) if args.syscfg else f"{args.name}.syscfg",
+                     openocd_exe=ctx["openocd_exe"],
+                     openocd_scripts=ctx["openocd_scripts"],
+                     debugger=ctx["debugger"],
+                     project_name=ctx["project_name"],
                      dry_run=args.dry_run)
     write_launch_json(project_dir, ctx, args.dry_run)
     write_cpp_properties(project_dir, ctx, args.dry_run)
@@ -2315,6 +2356,10 @@ def cmd_regenerate(args):
         write_tasks_json(project_dir,
                          sysconfig_cli=sysconfig_cli,
                          syscfg_name=os.path.basename(syscfg_path),
+                         openocd_exe=openocd_exe,
+                         openocd_scripts=_resolve_openocd_scripts(openocd_exe),
+                         debugger=args.debugger,
+                         project_name=project_name,
                          dry_run=args.dry_run)
         write_launch_json(project_dir, vscode_ctx, args.dry_run)
         write_cpp_properties(project_dir, vscode_ctx, args.dry_run)
