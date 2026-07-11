@@ -908,7 +908,7 @@ def init_git(project_dir: str, dry_run: bool = False) -> bool:
         # Write .gitignore (don't overwrite existing)
         gitignore_path = os.path.join(project_dir, ".gitignore")
         if not os.path.isfile(gitignore_path):
-            with open(gitignore_path, "w") as f:
+            with open(gitignore_path, "w", encoding="utf-8") as f:
                 f.write(GITIGNORE_TEMPLATE)
         success("Git repository initialized (.gitignore added)")
         return True
@@ -1236,7 +1236,7 @@ def write_dl_config_stubs(out_dir: str, device: str, sdk_dir: str = "", dry_run:
         if dry_run:
             info(f"[dry-run] Write stub ti_msp_dl_config.h")
         else:
-            with open(h_path, "w") as f:
+            with open(h_path, "w", encoding="utf-8") as f:
                 f.write(content_h)
             info("  + ti_msp_dl_config.h (stub — no peripherals configured)")
 
@@ -1244,7 +1244,7 @@ def write_dl_config_stubs(out_dir: str, device: str, sdk_dir: str = "", dry_run:
         if dry_run:
             info(f"[dry-run] Write stub ti_msp_dl_config.c")
         else:
-            with open(c_path, "w") as f:
+            with open(c_path, "w", encoding="utf-8") as f:
                 f.write(DL_CONFIG_C_STUB)
             info("  + ti_msp_dl_config.c (stub — no peripherals configured)")
 
@@ -1267,14 +1267,14 @@ def write_dl_config_stubs(out_dir: str, device: str, sdk_dir: str = "", dry_run:
                 if dry_run:
                     info(f"[dry-run] Write device_linker.lds (minimal)")
                 else:
-                    with open(lds_path, "w") as f:
+                    with open(lds_path, "w", encoding="utf-8") as f:
                         f.write(lds_content)
                     info("  + device_linker.lds (minimal — verify memory layout)")
         if not os.path.isfile(opt_path):
             if dry_run:
                 info(f"[dry-run] Write device.opt (empty)")
             else:
-                with open(opt_path, "w") as f:
+                with open(opt_path, "w", encoding="utf-8") as f:
                     f.write("")
                 info("  + device.opt (empty — no SysConfig flags)")
 
@@ -1779,7 +1779,7 @@ def write_cmake_lists(project_dir: str, ctx: dict, dry_run: bool = False):
     if dry_run:
         info(f"[dry-run] Write CMakeLists.txt ({len(content)} bytes)")
         return
-    with open(dest, "w") as f:
+    with open(dest, "w", encoding="utf-8") as f:
         f.write(content)
     info("  ✓ CMakeLists.txt")
 
@@ -1791,7 +1791,7 @@ def write_main_c(project_dir: str, ctx: dict, dry_run: bool = False):
         info(f"[dry-run] Write src/main.c")
         return
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    with open(dest, "w") as f:
+    with open(dest, "w", encoding="utf-8") as f:
         f.write(MAIN_C_TEMPLATE)
     info("  ✓ src/main.c")
 
@@ -1803,7 +1803,7 @@ def write_main_h(project_dir: str, ctx: dict, dry_run: bool = False):
     if dry_run:
         info(f"[dry-run] Write inc/main.h")
         return
-    with open(dest, "w") as f:
+    with open(dest, "w", encoding="utf-8") as f:
         f.write(content)
     info("  ✓ inc/main.h")
 
@@ -1833,7 +1833,7 @@ def write_tasks_json(project_dir: str, sysconfig_cli: str = "", syscfg_name: str
     content = content.replace("___OPENOCD_SCRIPTS___", openocd_scripts)
     content = content.replace("___FLASH_INTERFACE___", flash_interface)
     content = content.replace("___PROJECT_NAME___", project_name)
-    with open(dest, "w") as f:
+    with open(dest, "w", encoding="utf-8") as f:
         f.write(content)
     info("  ✓ .vscode/tasks.json")
 
@@ -1869,7 +1869,7 @@ def write_launch_json(project_dir: str, ctx: dict, dry_run: bool = False):
     if dry_run:
         info(f"[dry-run] Write .vscode/launch.json")
         return
-    with open(dest, "w") as f:
+    with open(dest, "w", encoding="utf-8") as f:
         f.write(content)
     info("  ✓ .vscode/launch.json")
 
@@ -1892,7 +1892,7 @@ def write_cpp_properties(project_dir: str, ctx: dict, dry_run: bool = False):
     if dry_run:
         info(f"[dry-run] Write .vscode/c_cpp_properties.json")
         return
-    with open(dest, "w") as f:
+    with open(dest, "w", encoding="utf-8") as f:
         f.write(content)
     info("  ✓ .vscode/c_cpp_properties.json")
 
@@ -1916,7 +1916,7 @@ def write_vscode_settings(project_dir: str, dry_run: bool = False):
     tb_config = json.loads(VSCode_SETTINGS_TEMPLATE)
     existing.update(tb_config)
 
-    with open(dest, "w") as f:
+    with open(dest, "w", encoding="utf-8") as f:
         json.dump(existing, f, indent=4, ensure_ascii=False)
         f.write("\n")
     info("  ✓ .vscode/settings.json (Task Buttons)")
