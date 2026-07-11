@@ -653,6 +653,7 @@ def parse_args() -> argparse.Namespace:
     )
     p_new.add_argument("--dry-run", action="store_true", help="预览模式：仅显示操作，不创建文件")
     p_new.add_argument("--no-build", action="store_true", help="跳过 cmake configure + build 验证")
+    p_new.add_argument("--no-git", action="store_true", help="禁止 Git 初始化（即使系统安装了 Git）")
 
     # ---- subcommand: regenerate ----
     p_regen = sub.add_parser(
@@ -697,6 +698,7 @@ def parse_args() -> argparse.Namespace:
     p_regen.add_argument("--backup", action="store_true", default=True, help="覆盖前备份旧文件到 .sysconfig_backup/ (默认开启)")
     p_regen.add_argument("--no-backup", action="store_false", dest="backup", help="禁用备份")
     p_regen.add_argument("--dry-run", action="store_true", help="预览模式")
+    p_regen.add_argument("--no-git", action="store_true", help="禁止 Git 初始化")
 
     # ---- subcommand: check ----
     sub.add_parser(
@@ -781,6 +783,7 @@ def _build_help_epilog() -> str:
       • 修改引脚/外设后运行 mspm0-init regenerate，手写代码安全无虞
       • --dry-run 预览模式先看看会生成什么，确认后再正式运行
       • --no-build 跳过构建验证，适合还未安装完整工具链时预览
+      • --no-git 跳过 Git 仓库初始化（默认检测到 git 则自动 git init）
       • 旧项目先 mspm0-init check 诊断环境，再逐步修复
       • regenerate 默认会自动备份旧文件到 .sysconfig_backup/
       • 生成的 .vscode/ 配置可直接用于 VSCode + Cortex-Debug 插件
@@ -881,6 +884,36 @@ def validate_environment(args: argparse.Namespace) -> bool:
     return ok
 
 
+def has_git() -> bool:
+    """Check if git is installed on the system."""
+    return shutil.which("git") is not None
+
+
+def init_git(project_dir: str, dry_run: bool = False) -> bool:
+    """Run git init and write a .gitignore in the project directory.
+
+    Returns True on success, False if git init failed.
+    """
+    if dry_run:
+        info("[dry-run] git init + .gitignore")
+        return True
+    try:
+        subprocess.run(
+            ["git", "init"], cwd=project_dir,
+            check=True, capture_output=True, text=True,
+        )
+        # Write .gitignore (don't overwrite existing)
+        gitignore_path = os.path.join(project_dir, ".gitignore")
+        if not os.path.isfile(gitignore_path):
+            with open(gitignore_path, "w") as f:
+                f.write(GITIGNORE_TEMPLATE)
+        success("Git repository initialized (.gitignore added)")
+        return True
+    except (subprocess.CalledProcessError, OSError) as e:
+        warn(f"git init failed: {e}")
+        return False
+
+
 def cmd_check(args: argparse.Namespace):
     """Check development environment and report status of all required tools."""
     print()
@@ -947,6 +980,12 @@ def cmd_check(args: argparse.Namespace):
     openocd_ok = os.path.isfile(openocd) or shutil.which(openocd) is not None
     check_item("OpenOCD", openocd_ok,
                openocd if openocd_ok else "not found — install via VSCode TI plugin or CCS Theia")
+
+    # 10) Git (optional)
+    git_bin = shutil.which("git")
+    check_item("Git", git_bin is not None,
+               git_bin or "not found — 项目将不启用版本控制",
+               required=False)
 
     # Summary
     print()
@@ -1499,6 +1538,30 @@ MAIN_H_TEMPLATE = textwrap.dedent("""\
 
 
 # =============================================================================
+# Step 7d: Template - .gitignore
+# =============================================================================
+GITIGNORE_TEMPLATE = """\
+# Build output
+build/
+*.elf
+*.hex
+*.bin
+*.map
+*.o
+*.d
+
+# SysConfig temp
+.sysconfig_tmp/
+.sysconfig_backup/
+
+# IDE
+.vscode/
+.DS_Store
+Thumbs.db
+"""
+
+
+# =============================================================================
 # Step 8: Template - .vscode/tasks.json
 # =============================================================================
 TASKS_JSON_TEMPLATE = """\
@@ -2000,6 +2063,16 @@ def cmd_new(args):
     elif args.dry_run:
         info("--- Step 9: [dry-run] Skip build ---")
 
+    # ── Step 10: Git init ──
+    if not args.no_git:
+        if has_git():
+            if not args.dry_run:
+                init_git(project_dir, args.dry_run)
+            else:
+                info("[dry-run] git init + .gitignore")
+        else:
+            info("Git not found — 未启用版本控制，可安装 git 后在项目目录手动 git init")
+
     # -- Summary --
     print_summary(ctx)
 
@@ -2161,6 +2234,16 @@ def cmd_regenerate(args):
         }
         write_launch_json(project_dir, vscode_ctx, args.dry_run)
         write_cpp_properties(project_dir, vscode_ctx, args.dry_run)
+
+    # ---- Git init (if not already a repo) ----
+    if not args.no_git and not os.path.isdir(os.path.join(project_dir, ".git")):
+        if has_git():
+            if not args.dry_run:
+                init_git(project_dir, args.dry_run)
+            else:
+                info("[dry-run] git init + .gitignore")
+        else:
+            info("Git not found — 未启用版本控制")
 
     print(f"""
 {Color.BOLD}{Color.GREEN}  Regeneration complete.{Color.RESET}
