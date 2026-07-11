@@ -2053,7 +2053,7 @@ def print_summary(ctx: dict):
 # =============================================================================
 def cmd_new(args):
     print(f"\n{Color.BOLD}{Color.CYAN}╔════════════════════════════════════╗")
-    print(f"║   MSPM0 Project Init v0.3.1       ║")
+    print(f"║   MSPM0 Project Init v0.3.2       ║")
     print(f"╚════════════════════════════════════╝{Color.RESET}\n")
 
     # ── Step 1: Auto-discover syscfg if not provided ──
@@ -2349,7 +2349,7 @@ def cmd_regenerate(args):
     # ---- Regenerate VSCode configs (paths may have changed) ----
     if args.debugger != "none":
         info("--- Updating VSCode configs ---")
-        project_name = os.path.basename(project_dir)
+        project_name = _extract_project_name_from_cmake(project_dir) or os.path.basename(project_dir)
         openocd_exe = _resolve_openocd_exe(args.openocd)
         gdb_exe = _resolve_gdb_exe(args.gdb)
         vscode_ctx = {
@@ -2398,6 +2398,22 @@ def cmd_regenerate(args):
 # =============================================================================
 # _build_ctx() — shared context builder
 # =============================================================================
+def _extract_project_name_from_cmake(project_dir: str) -> Optional[str]:
+    """Extract the project name from CMakeLists.txt.
+
+    Parses ``project(NAME C ASM)`` and returns NAME.
+    Returns None when CMakeLists.txt is missing or unparseable.
+    """
+    cmake_file = os.path.join(project_dir, "CMakeLists.txt")
+    if not os.path.isfile(cmake_file):
+        return None
+    content = _read_text_file(cmake_file)
+    match = re.search(r"project\s*\(\s*(\w+)", content)
+    if match:
+        return match.group(1)
+    return None
+
+
 def _build_ctx(args, project_dir, chip, dl_meta):
     openocd_exe = _resolve_openocd_exe(args.openocd)
     gdb_exe = _resolve_gdb_exe(args.gdb)

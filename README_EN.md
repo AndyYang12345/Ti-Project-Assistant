@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![MSPM0](https://img.shields.io/badge/chip-MSPM0-red)](https://www.ti.com/microcontrollers-mcus-processors/arm-based-microcontrollers/mspm0/overview.html)
-[![Version](https://img.shields.io/badge/version-v0.3.0-informational)](https://github.com/AndyYang12345/Ti-Project-Assistant)
+[![Version](https://img.shields.io/badge/version-v0.3.2-informational)](https://github.com/AndyYang12345/Ti-Project-Assistant)
 
 **One command** to bootstrap a complete TI MSPM0 embedded project from a [SysConfig](https://www.ti.com/tool/SYSCONFIG) file. No CCS required.
 
