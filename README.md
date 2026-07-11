@@ -60,6 +60,7 @@ mspm0-init regenerate    # 仅更新生成文件，src/ 下手写代码安全无
 - 生成 `CMakeLists.txt`（`file(GLOB_RECURSE)` 递归链接，arm-none-eabi-gcc 工具链）
 - 生成 `.vscode/` 三件套（`launch.json` / `tasks.json` / `c_cpp_properties.json`）
 - 自动 cmake configure + build 验证
+- 自动 `git init` + 写入 `.gitignore`（检测到 Git 已安装时启用，可用 `--no-git` 跳过）
 
 ---
 
@@ -75,7 +76,7 @@ mspm0-init regenerate    # 仅更新生成文件，src/ 下手写代码安全无
 | Ninja | 任意 | `sudo apt install ninja-build` |
 | TI MSPM0 SDK | 2.x | [下载](https://www.ti.com/tool/MSPM0-SDK) → 解压到 `~/ti/` |
 | TI SysConfig | 1.x | [下载](https://www.ti.com/tool/SYSCONFIG) → 解压到 `~/ti/` |
-| OpenOCD (TI 定制) | 1.3.x | 随 [CCS Theia](https://www.ti.com/tool/CCSTUDIO) 安装 |
+| OpenOCD (TI 定制) | 1.3.x | 从 TI VSCode 插件中自动安装 |
 | arm-none-eabi-gdb | 14.x | 从 TI VSCode 插件中自动安装 |
 
 一行装完基础工具：
@@ -94,7 +95,7 @@ sudo apt install python3 gcc-arm-none-eabi cmake ninja-build
 | Ninja | 任意 | [ninja-build.org](https://ninja-build.org/) 或 `winget install Ninja-build.Ninja` |
 | TI MSPM0 SDK | 2.x | [下载](https://www.ti.com/tool/MSPM0-SDK) → 解压到 `C:\ti\` |
 | TI SysConfig | 1.x | [下载](https://www.ti.com/tool/SYSCONFIG) → 解压到 `C:\ti\` |
-| OpenOCD (TI 定制) | 1.3.x | 随 [CCS Theia](https://www.ti.com/tool/CCSTUDIO) 安装 |
+| OpenOCD (TI 定制) | 1.3.x | 从 TI VSCode 插件中自动安装 |
 | arm-none-eabi-gdb | 14.x | 从 TI VSCode 插件中自动安装 |
 
 ---
@@ -146,6 +147,9 @@ mspm0-init new myboard.syscfg -n my_project -d xds110
 
 # 无 syscfg，纯裸机起点
 mspm0-init new --device MSPM0G3507 --package "LQFP-48(PT)" -n bare_start
+
+# 跳过 Git 初始化
+mspm0-init new -n my_project --no-git
 ```
 
 ### 重新生成配置
@@ -171,12 +175,14 @@ mspm0-init new [syscfg] -n NAME [选项]
   --package PACKAGE      手动指定封装，如 LQFP-48(PT)
   --dry-run              预览模式，不创建文件
   --no-build             跳过 cmake 构建验证
+  --no-git               禁用 Git 自动初始化
 
 mspm0-init regenerate [项目目录] [选项]
 
   --no-build             跳过重编译
   --no-backup            不备份旧文件
   --dry-run              预览模式
+  --no-git               禁用 Git 自动初始化
 ```
 
 ---
@@ -186,6 +192,7 @@ mspm0-init regenerate [项目目录] [选项]
 ```
 my_project/
 ├── CMakeLists.txt              # CMake 构建定义
+├── .gitignore                  # Git 忽略规则（自动生成）
 ├── my_project.syscfg           # 原始 SysConfig 配置
 ├── config/
 │   ├── ti_msp_dl_config.h      # 自动生成 — 请勿手动编辑
@@ -252,6 +259,7 @@ mspm0-init
 ├── CMake + Ninja ───────────── 构建系统
 ├── OpenOCD 1.3.x ───────────── GDB Server + 烧录
 ├── arm-none-eabi-gdb 14.x ──── 源码级调试
+├── Git ──────────────────────── 版本控制（自动初始化）
 └── VS Code + Cortex-Debug ──── IDE 集成
 ```
 

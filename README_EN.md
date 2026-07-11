@@ -60,6 +60,7 @@ The script automates:
 - Generates `CMakeLists.txt` with `file(GLOB_RECURSE)` for automatic source discovery (arm-none-eabi-gcc toolchain)
 - Generates `.vscode/` configs (`launch.json` / `tasks.json` / `c_cpp_properties.json`)
 - Auto cmake configure + build verification
+- Auto `git init` + `.gitignore` (enabled when Git is detected; skip with `--no-git`)
 
 ---
 
@@ -75,7 +76,7 @@ The script automates:
 | Ninja | any | `sudo apt install ninja-build` |
 | TI MSPM0 SDK | 2.x | [Download](https://www.ti.com/tool/MSPM0-SDK) → extract to `~/ti/` |
 | TI SysConfig | 1.x | [Download](https://www.ti.com/tool/SYSCONFIG) → extract to `~/ti/` |
-| OpenOCD (TI fork) | 1.3.x | Included with [CCS Theia](https://www.ti.com/tool/CCSTUDIO) |
+| OpenOCD (TI fork) | 1.3.x | Auto-installed from TI VSCode plugin |
 | arm-none-eabi-gdb | 14.x | Auto-installed from TI VSCode plugin |
 
 One-liner:
@@ -94,7 +95,7 @@ sudo apt install python3 gcc-arm-none-eabi cmake ninja-build
 | Ninja | any | [ninja-build.org](https://ninja-build.org/) or `winget install Ninja-build.Ninja` |
 | TI MSPM0 SDK | 2.x | [Download](https://www.ti.com/tool/MSPM0-SDK) → extract to `C:\ti\` |
 | TI SysConfig | 1.x | [Download](https://www.ti.com/tool/SYSCONFIG) → extract to `C:\ti\` |
-| OpenOCD (TI fork) | 1.3.x | Included with [CCS Theia](https://www.ti.com/tool/CCSTUDIO) |
+| OpenOCD (TI fork) | 1.3.x | Auto-installed from TI VSCode plugin |
 | arm-none-eabi-gdb | 14.x | Auto-installed from TI VSCode plugin |
 
 ---
@@ -146,6 +147,9 @@ mspm0-init new myboard.syscfg -n my_project -d xds110
 
 # Without syscfg (bare-metal start)
 mspm0-init new --device MSPM0G3507 --package "LQFP-48(PT)" -n bare_start
+
+# Skip Git initialization
+mspm0-init new -n my_project --no-git
 ```
 
 ### Regenerate config
@@ -171,12 +175,14 @@ mspm0-init new [syscfg] -n NAME [options]
   --package PACKAGE      Specify package, e.g. LQFP-48(PT)
   --dry-run              Preview only, don't create files
   --no-build             Skip cmake build verification
+  --no-git               Skip Git initialization
 
 mspm0-init regenerate [project_dir] [options]
 
   --no-build             Skip rebuild
   --no-backup            Don't backup old files
   --dry-run              Preview mode
+  --no-git               Skip Git initialization
 ```
 
 ---
@@ -186,6 +192,7 @@ mspm0-init regenerate [project_dir] [options]
 ```
 my_project/
 ├── CMakeLists.txt              # Build definition
+├── .gitignore                  # Git ignore rules (auto-generated)
 ├── my_project.syscfg           # Original SysConfig config
 ├── config/
 │   ├── ti_msp_dl_config.h      # Auto-generated — DO NOT EDIT
@@ -252,6 +259,7 @@ mspm0-init
 ├── CMake + Ninja ───────────── Build system
 ├── OpenOCD 1.3.x ───────────── GDB Server + flashing
 ├── arm-none-eabi-gdb 14.x ──── Source-level debug
+├── Git ──────────────────────── Version control (auto-initialized)
 └── VS Code + Cortex-Debug ──── IDE integration
 ```
 
