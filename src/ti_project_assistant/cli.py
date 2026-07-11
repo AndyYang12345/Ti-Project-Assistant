@@ -784,6 +784,7 @@ def _build_help_epilog() -> str:
       • --dry-run 预览模式先看看会生成什么，确认后再正式运行
       • --no-build 跳过构建验证，适合还未安装完整工具链时预览
       • --no-git 跳过 Git 仓库初始化（默认检测到 git 则自动 git init）
+      • VSCode 中 Ctrl+Shift+P → Run Task → Open SysConfig 直接打开配置界面
       • 旧项目先 mspm0-init check 诊断环境，再逐步修复
       • regenerate 默认会自动备份旧文件到 .sysconfig_backup/
       • 生成的 .vscode/ 配置可直接用于 VSCode + Cortex-Debug 插件
@@ -1616,6 +1617,22 @@ TASKS_JSON_TEMPLATE = """\
             ],
             "group": "build",
             "problemMatcher": []
+        },
+        {
+            "label": "Open SysConfig",
+            "detail": "Launch TI SysConfig GUI to edit pin/peripheral configuration",
+            "type": "shell",
+            "command": "___SYSCONFIG_CLI___",
+            "args": [
+                "___SYSCONFIG_FILE___"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "never"
+            }
         }
     ]
 }"""
@@ -1741,14 +1758,17 @@ def write_main_h(project_dir: str, ctx: dict, dry_run: bool = False):
     info("  ✓ inc/main.h")
 
 
-def write_tasks_json(project_dir: str, dry_run: bool = False):
+def write_tasks_json(project_dir: str, sysconfig_cli: str = "", syscfg_name: str = "", dry_run: bool = False):
     """Generate .vscode/tasks.json."""
     dest = os.path.join(project_dir, ".vscode", "tasks.json")
     if dry_run:
         info(f"[dry-run] Write .vscode/tasks.json")
         return
+    content = TASKS_JSON_TEMPLATE.replace("___CMAKE_GENERATOR___", _CMAKE_GENERATOR)
+    content = content.replace("___SYSCONFIG_CLI___", sysconfig_cli)
+    content = content.replace("___SYSCONFIG_FILE___", syscfg_name)
     with open(dest, "w") as f:
-        f.write(TASKS_JSON_TEMPLATE.replace("___CMAKE_GENERATOR___", _CMAKE_GENERATOR))
+        f.write(content)
     info("  ✓ .vscode/tasks.json")
 
 
@@ -2048,7 +2068,10 @@ def cmd_new(args):
 
     # -- Step 8: Write .vscode configs --
     info("--- Step 8: Generate VSCode configs ---")
-    write_tasks_json(project_dir, args.dry_run)
+    write_tasks_json(project_dir,
+                     sysconfig_cli=args._sysconfig_cli,
+                     syscfg_name=os.path.basename(args.syscfg) if args.syscfg else f"{args.name}.syscfg",
+                     dry_run=args.dry_run)
     write_launch_json(project_dir, ctx, args.dry_run)
     write_cpp_properties(project_dir, ctx, args.dry_run)
 
@@ -2232,6 +2255,10 @@ def cmd_regenerate(args):
             "device_name": chip["device_name"],
             "device_define": chip["device_define"],
         }
+        write_tasks_json(project_dir,
+                         sysconfig_cli=sysconfig_cli,
+                         syscfg_name=os.path.basename(syscfg_path),
+                         dry_run=args.dry_run)
         write_launch_json(project_dir, vscode_ctx, args.dry_run)
         write_cpp_properties(project_dir, vscode_ctx, args.dry_run)
 
