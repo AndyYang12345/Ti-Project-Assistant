@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![MSPM0](https://img.shields.io/badge/chip-MSPM0-red)](https://www.ti.com/microcontrollers-mcus-processors/arm-based-microcontrollers/mspm0/overview.html)
-[![Version](https://img.shields.io/badge/version-v0.3.3-informational)](https://github.com/AndyYang12345/Ti-Project-Assistant)
+[![PyPI](https://img.shields.io/pypi/v/ti-project-assistant?label=version)](https://pypi.org/project/ti-project-assistant/)
 
 **One command** to bootstrap a complete TI MSPM0 embedded project from a [SysConfig](https://www.ti.com/tool/SYSCONFIG) file. No CCS required.
 
@@ -19,6 +19,12 @@ pip install ti-project-assistant
 ```
 
 Once installed, the `mspm0-init` command is available system-wide (Windows / Linux / macOS).
+
+Verify installation:
+
+```bash
+mspm0-init --version     # or -V, prints version to confirm installation
+```
 
 ---
 
@@ -51,6 +57,8 @@ mspm0-init regenerate    # Only generated files are updated. Your src/ code is s
 | (no args) | Auto-detect `.syscfg` in current dir, create project in-place |
 | `new` | Create a new project from `.syscfg` |
 | `regenerate` | Re-run SysConfig after pin/peripheral changes, **leaving hand-written code untouched** |
+| `check` | Self-check toolchain: arm-gcc, CMake, SysConfig, SDK, OpenOCD status |
+| `--version` / `-V` | Print version number to verify installation |
 
 The script automates:
 
@@ -192,6 +200,12 @@ mspm0-init regenerate [project_dir] [options]
   --no-backup            Don't backup old files
   --dry-run              Preview mode
   --no-git               Skip Git initialization
+
+Common options:
+
+  --version, -V           Print version and exit
+  --check                 Self-check development environment
+  -h, --help              Show full help message
 ```
 
 ---
@@ -281,13 +295,17 @@ cd ti-project-assistant
 
 # Editable install (recommended, changes take effect immediately)
 pip install -e .
-
-# Or manual install to PATH (Linux)
-ln -s $(pwd)/mspm0-init ~/bin/mspm0-init
-
-# Or manual install to PATH (Windows)
-# Add ti-project-assistant directory to system PATH
 ```
+
+The version is driven by `git tag` via [hatch-vcs](https://github.com/ofek/hatch-vcs) — no need to manually update version strings in source files.
+
+### Release workflow
+
+```bash
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
+Pushing a tag triggers [GitHub Actions](https://github.com/AndyYang12345/Ti-Project-Assistant/actions/workflows/publish.yml) to automatically build the wheel and publish to [PyPI](https://pypi.org/project/ti-project-assistant/). No manual `build` or `twine` needed.
 
 ## License
 

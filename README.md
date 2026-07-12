@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![MSPM0](https://img.shields.io/badge/芯片-MSPM0-red)](https://www.ti.com/microcontrollers-mcus-processors/arm-based-microcontrollers/mspm0/overview.html)
-[![Version](https://img.shields.io/badge/版本-v0.3.3-informational)](https://github.com/AndyYang12345/Ti-Project-Assistant)
+[![PyPI](https://img.shields.io/pypi/v/ti-project-assistant?label=版本)](https://pypi.org/project/ti-project-assistant/)
 
 **一行命令**，从 [SysConfig](https://www.ti.com/tool/SYSCONFIG) 图形化配置出发，自动生成完整的 TI MSPM0 嵌入式项目。告别 CCS 手动配置。
 
@@ -19,6 +19,12 @@ pip install ti-project-assistant
 ```
 
 安装完成后，`mspm0-init` 命令即可在终端中使用（Windows / Linux / macOS）。
+
+验证安装：
+
+```bash
+mspm0-init --version     # 或 -V，输出版本号确认安装成功
+```
 
 ---
 
@@ -51,6 +57,8 @@ mspm0-init regenerate    # 仅更新生成文件，src/ 下手写代码安全无
 | （无参数） | 自动发现当前目录 `.syscfg`，原地创建项目 |
 | `new` | 从 `.syscfg` 创建新项目 |
 | `regenerate` | 修改引脚/外设配置后重新生成代码，**不改动手写代码** |
+| `check` | 自检开发环境：arm-gcc、CMake、SysConfig、SDK、OpenOCD 等工具链状态 |
+| `--version` / `-V` | 显示当前版本号，用于验证安装 |
 
 脚本自动完成：
 
@@ -192,6 +200,12 @@ mspm0-init regenerate [项目目录] [选项]
   --no-backup            不备份旧文件
   --dry-run              预览模式
   --no-git               禁用 Git 自动初始化
+
+通用选项:
+
+  --version, -V           显示版本号并退出
+  --check                 自检开发环境
+  -h, --help              显示完整帮助
 ```
 
 ---
@@ -281,13 +295,17 @@ cd ti-project-assistant
 
 # 可编辑安装（推荐，修改即时生效）
 pip install -e .
-
-# 或手动安装到 PATH（Linux）
-ln -s $(pwd)/mspm0-init ~/bin/mspm0-init
-
-# 或手动安装到 PATH（Windows）
-# 将 ti-project-assistant 目录加入系统 PATH
 ```
+
+版本号由 `git tag` 驱动（[hatch-vcs](https://github.com/ofek/hatch-vcs)），无需手动修改源文件。构建时自动从 tag 提取版本。
+
+### 发布流程
+
+```bash
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
+推送 tag 后 [GitHub Actions](https://github.com/AndyYang12345/Ti-Project-Assistant/actions/workflows/publish.yml) 自动构建 wheel 并发布到 [PyPI](https://pypi.org/project/ti-project-assistant/)。无需手动运行 build 或 twine。
 
 ## 许可证
 
