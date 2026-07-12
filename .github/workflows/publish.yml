@@ -1,0 +1,70 @@
+name: Build & Publish to PyPI
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build wheel + sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # hatch-vcs needs full git history
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set release version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "Version: $TAG"
+          echo "SETUPTOOLS_SCM_PRETEND_VERSION=$TAG" >> "$GITHUB_ENV"
+
+      - name: Install build frontend
+        run: pip install build
+
+      - name: Build wheel + sdist
+        run: python -m build
+
+      - name: Show built artifacts
+        run: ls -lh dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')  # Only publish on tag push
+    runs-on: ubuntu-latest
+    environment: release  # Must match PyPI Trusted Publisher env name
+    permissions:
+      id-token: write  # Required for OIDC Trusted Publisher
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # --- OIDC Trusted Publisher (recommended) ---
+        # 1. Go to https://pypi.org/manage/project/ti-project-assistant/settings/publishing/
+        # 2. Add "Pending Publisher":
+        #    Owner: AndyYang12345
+        #    Repository: Ti-Project-Assistant
+        #    Workflow name: publish.yml
+        # 3. Confirm — done! No token needed.
+        #
+        # --- API Token (alternative) ---
+        # Uncomment below and set PYPI_API_TOKEN in GitHub Secrets.
+        # with:
+        #   password: ${{ secrets.PYPI_API_TOKEN }}

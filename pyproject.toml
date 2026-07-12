@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "ti-project-assistant"
-version = "0.3.3"
+dynamic = ["version"]
 description = "TI MSPM0 one-click project init tool — bootstrap embedded projects from SysConfig"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -35,6 +35,16 @@ mspm0-init = "ti_project_assistant.cli:main"
 [project.urls]
 Homepage = "https://github.com/AndyYang12345/Ti-Project-Assistant"
 Repository = "https://github.com/AndyYang12345/Ti-Project-Assistant.git"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.vcs]
+version-scheme = "post-release"
+local-scheme = "no-local-version"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/ti_project_assistant/_version.py"
 
 [tool.hatch.build.targets.sdist]
 exclude = [

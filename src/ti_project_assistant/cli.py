@@ -28,6 +28,11 @@ import re
 import sys
 import json
 import shutil
+
+try:
+    from ti_project_assistant import __version__
+except ImportError:
+    __version__ = "unknown"
 import subprocess
 import textwrap
 from pathlib import Path
@@ -604,6 +609,12 @@ def parse_args() -> argparse.Namespace:
         "--check",
         action="store_true",
         help="自检开发环境：检查 arm-gcc、CMake、SysConfig、SDK、OpenOCD 等工具链是否就绪",
+    )
+    parser.add_argument(
+        "--version", "-V",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="显示版本号并退出",
     )
 
     sub = parser.add_subparsers(dest="command", help="子命令（可省略，工具会自动判断上下文）")
@@ -2053,7 +2064,7 @@ def print_summary(ctx: dict):
 # =============================================================================
 def cmd_new(args):
     print(f"\n{Color.BOLD}{Color.CYAN}╔════════════════════════════════════╗")
-    print(f"║   MSPM0 Project Init v0.3.3       ║")
+    print(f"║   MSPM0 Project Init v{__version__}       ║")
     print(f"╚════════════════════════════════════╝{Color.RESET}\n")
 
     # ── Step 1: Auto-discover syscfg if not provided ──
@@ -2445,7 +2456,7 @@ def _build_ctx(args, project_dir, chip, dl_meta):
 def main():
     # Backward compat: if first arg is not a subcommand, insert 'new'
     _args = sys.argv[1:]
-    if _args and _args[0] not in ("new", "regenerate", "check", "-h", "--help", "--check"):
+    if _args and _args[0] not in ("new", "regenerate", "check", "-h", "--help", "--check", "--version", "-V"):
         # Check if it looks like a path or is an option flag
         if not _args[0].startswith("-"):
             sys.argv.insert(1, "new")
