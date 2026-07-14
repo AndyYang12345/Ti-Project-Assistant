@@ -941,7 +941,7 @@ def cmd_check(args: argparse.Namespace):
     def check_item(name: str, ok: bool, detail: str, required: bool = True):
         nonlocal all_ok
         if ok:
-            success(f"[OK] {name}: {detail}")
+            success(f"{name}: {detail}")
         elif required:
             error(f"[MISSING] {name}: {detail}")
             all_ok = False
