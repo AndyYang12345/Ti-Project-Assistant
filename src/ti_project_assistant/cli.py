@@ -94,26 +94,56 @@ def _tool_cache_roots() -> List[str]:
     return roots
 
 
-def _resolve_sdk() -> str:
-    """Resolve MSPM0 SDK path: env var > auto-discover > hardcoded default."""
+def _resolve_sdk(preferred: Optional[str] = None) -> Optional[str]:
+    """Resolve MSPM0 SDK path.
+
+    Unified cross-platform priority:
+      1. CLI arg (--sdk) — explicit user override
+      2. MSPM0_SDK env var — manual configuration
+      3. Auto-discover from TI base directory (~/ti or C:\\ti)
+      Returns None if not found (caller reports the error).
+    """
+    # 1) CLI arg — explicit override
+    if preferred and os.path.isdir(os.path.join(preferred, ".metadata")):
+        return preferred
+
+    # 2) MSPM0_SDK environment variable
     env = os.environ.get("MSPM0_SDK")
     if env and os.path.isdir(os.path.join(env, ".metadata")):
         return env
+
+    # 3) Auto-discover from TI base directory
     discovered = _discover_dir(_TI_BASE, r"mspm0_sdk_\d+.*")
     if discovered:
         return discovered
-    return os.path.join(_TI_BASE, "mspm0_sdk_2_10_00_04")
+
+    return None
 
 
-def _resolve_sysconfig() -> str:
-    """Resolve SysConfig path: env var > auto-discover > hardcoded default."""
+def _resolve_sysconfig(preferred: Optional[str] = None) -> Optional[str]:
+    """Resolve SysConfig installation path.
+
+    Unified cross-platform priority:
+      1. CLI arg (--sysconfig) — explicit user override
+      2. SYSCONFIG_DIR env var — manual configuration
+      3. Auto-discover from TI base directory (~/ti or C:\\ti)
+      Returns None if not found (caller reports the error).
+    """
+    # 1) CLI arg — explicit override
+    if preferred and os.path.isfile(os.path.join(preferred, _SYSCONFIG_CLI_NAME)):
+        return preferred
+
+    # 2) SYSCONFIG_DIR environment variable
     env = os.environ.get("SYSCONFIG_DIR")
     if env and os.path.isfile(os.path.join(env, _SYSCONFIG_CLI_NAME)):
         return env
+
+    # 3) Auto-discover from TI base directory
     discovered = _discover_dir(_TI_BASE, r"sysconfig_\d+.*")
     if discovered:
         return discovered
-    return os.path.join(_TI_BASE, "sysconfig_1.27.1")
+
+    return None
 
 
 def _read_text_file(path: str) -> str:
@@ -148,15 +178,16 @@ def _candidate_tool_path(path: Optional[str], executable_name: str) -> Optional[
     return None
 
 
-def _resolve_openocd_exe(preferred: Optional[str] = None) -> str:
-    """Resolve OpenOCD executable — PATH first, then env vars and fallbacks.
+def _resolve_openocd_exe(preferred: Optional[str] = None) -> Optional[str]:
+    """Resolve OpenOCD executable path.
 
     Unified cross-platform priority:
-      1. CLI arg (--openocd / --openocd-path)
-      2. PATH (shutil.which) — primary, works on both Windows and Linux
-      3. OPENOCD_DIR env var — manual override when not on PATH
-      4. TI embedded-debug cache — auto-discovered from VSCode plugin / CCS
+      1. CLI arg (--openocd / --openocd-path) — explicit user override
+      2. OPENOCD_DIR env var — manual override, more intentional than PATH
+      3. PATH (shutil.which) — cross-platform auto-discovery
+      4. TI embedded-debug cache — VSCode plugin / CCS Theia
       5. TI_ROOT / CCS_BASE — legacy
+      Returns None if not found (caller reports the error).
     """
     executable_name = "openocd.exe" if IS_WIN else "openocd"
 
@@ -165,15 +196,15 @@ def _resolve_openocd_exe(preferred: Optional[str] = None) -> str:
     if manual:
         return manual
 
-    # 2) PATH — primary cross-platform discovery
-    path_exe = shutil.which(executable_name)
-    if path_exe:
-        return path_exe
-
-    # 3) OPENOCD_DIR environment variable (manual override)
+    # 2) OPENOCD_DIR environment variable
     env_path = _candidate_tool_path(os.environ.get("OPENOCD_DIR"), executable_name)
     if env_path:
         return env_path
+
+    # 3) PATH — cross-platform auto-discovery
+    path_exe = shutil.which(executable_name)
+    if path_exe:
+        return path_exe
 
     # 4) TI embedded-debug cache (fallback — VSCode plugin / CCS Theia)
     for root in _tool_cache_roots():
@@ -187,19 +218,20 @@ def _resolve_openocd_exe(preferred: Optional[str] = None) -> str:
         if discovered:
             return discovered
 
-    return executable_name
+    return None
 
 
-def _resolve_gdb_exe(preferred: Optional[str] = None) -> str:
-    """Resolve arm-none-eabi-gdb executable — PATH first, then env vars and fallbacks.
+def _resolve_gdb_exe(preferred: Optional[str] = None) -> Optional[str]:
+    """Resolve arm-none-eabi-gdb executable path.
 
     Unified cross-platform priority:
-      1. CLI arg (--gdb / --gdb-path)
-      2. PATH (shutil.which) — primary, works on both Windows and Linux
-      3. GDB_DIR env var — manual override when not on PATH
-      4. TI embedded-debug cache — auto-discovered from VSCode plugin / CCS
-      5. gdb-multiarch — common Debian/Ubuntu fallback (apt install gdb-multiarch)
+      1. CLI arg (--gdb / --gdb-path) — explicit user override
+      2. GDB_DIR env var — manual override, more intentional than PATH
+      3. PATH (shutil.which) — cross-platform auto-discovery
+      4. TI embedded-debug cache — VSCode plugin / CCS Theia
+      5. gdb-multiarch — Debian/Ubuntu fallback (apt install gdb-multiarch)
       6. TI_ROOT / CCS_BASE — legacy
+      Returns None if not found (caller reports the error).
     """
     executable_name = "arm-none-eabi-gdb.exe" if IS_WIN else "arm-none-eabi-gdb"
 
@@ -208,15 +240,15 @@ def _resolve_gdb_exe(preferred: Optional[str] = None) -> str:
     if manual:
         return manual
 
-    # 2) PATH — primary cross-platform discovery
-    path_exe = shutil.which(executable_name)
-    if path_exe:
-        return path_exe
-
-    # 3) GDB_DIR environment variable (manual override)
+    # 2) GDB_DIR environment variable
     env_path = _candidate_tool_path(os.environ.get("GDB_DIR"), executable_name)
     if env_path:
         return env_path
+
+    # 3) PATH — cross-platform auto-discovery
+    path_exe = shutil.which(executable_name)
+    if path_exe:
+        return path_exe
 
     # 4) TI embedded-debug cache (fallback — VSCode plugin / CCS Theia)
     for root in _tool_cache_roots():
@@ -224,7 +256,7 @@ def _resolve_gdb_exe(preferred: Optional[str] = None) -> str:
         if discovered:
             return discovered
 
-    # 5) gdb-multiarch — common Debian/Ubuntu fallback (apt install gdb-multiarch)
+    # 5) gdb-multiarch — common Debian/Ubuntu fallback
     gdb_ma = shutil.which("gdb-multiarch")
     if gdb_ma:
         return gdb_ma
@@ -235,11 +267,13 @@ def _resolve_gdb_exe(preferred: Optional[str] = None) -> str:
         if discovered:
             return discovered
 
-    return executable_name
+    return None
 
 
-def _posix_path(path: str) -> str:
+def _posix_path(path: Optional[str]) -> str:
     """Normalize a filesystem path for CMake/JSON by using forward slashes."""
+    if not path:
+        return ""
     return str(Path(path)).replace("\\", "/")
 
 
@@ -289,14 +323,15 @@ def _iter_jlink_dirs() -> list:
     return dirs
 
 
-def _resolve_jlink_gdb_server_exe(preferred: Optional[str] = None) -> str:
-    """Resolve JLinkGDBServerCLExe — PATH first, then env vars and fallbacks.
+def _resolve_jlink_gdb_server_exe(preferred: Optional[str] = None) -> Optional[str]:
+    """Resolve JLinkGDBServerCLExe executable path.
 
     Unified cross-platform priority:
-      1. CLI arg (--jlink / --jlink-path)
-      2. PATH (shutil.which) — primary, works on both Windows and Linux
-      3. JLINK_DIR env var — manual override when not on PATH
+      1. CLI arg (--jlink / --jlink-path) — explicit user override
+      2. JLINK_DIR env var — manual override, more intentional than PATH
+      3. PATH (shutil.which) — cross-platform auto-discovery
       4. Platform-specific well-known install directories
+      Returns None if not found (caller reports the error).
     """
     executable_name = "JLinkGDBServerCLExe.exe" if IS_WIN else "JLinkGDBServerCLExe"
 
@@ -305,15 +340,15 @@ def _resolve_jlink_gdb_server_exe(preferred: Optional[str] = None) -> str:
     if manual:
         return manual
 
-    # 2) PATH — primary cross-platform discovery
-    path_exe = shutil.which(executable_name)
-    if path_exe:
-        return path_exe
-
-    # 3) JLINK_DIR environment variable (manual override)
+    # 2) JLINK_DIR environment variable
     env_path = _candidate_tool_path(os.environ.get("JLINK_DIR"), executable_name)
     if env_path:
         return env_path
+
+    # 3) PATH — cross-platform auto-discovery
+    path_exe = shutil.which(executable_name)
+    if path_exe:
+        return path_exe
 
     # 4) Platform-specific well-known install directories
     if IS_WIN:
@@ -328,16 +363,16 @@ def _resolve_jlink_gdb_server_exe(preferred: Optional[str] = None) -> str:
             if os.path.isfile(candidate):
                 return candidate
 
-    # 5) Fallback: bare executable name
-    return executable_name
+    return None
 
 
-def _resolve_jlink_exe(preferred: Optional[str] = None) -> str:
-    """Resolve JLinkExe — PATH first, deriving from GDB server as fallback.
+def _resolve_jlink_exe(preferred: Optional[str] = None) -> Optional[str]:
+    """Resolve JLinkExe executable path.
 
     Unified cross-platform priority:
-      1. CLI arg (--jlink / --jlink-path) — derives sibling from resolved GDB server
-      2. PATH (shutil.which) — primary, works on both Windows and Linux
+      1. Derive from resolved GDB server path (same SEGGER install directory)
+      2. PATH (shutil.which) — cross-platform auto-discovery
+      Returns None if not found (caller reports the error).
     """
     executable_name = "JLinkExe.exe" if IS_WIN else "JLinkExe"
 
@@ -348,13 +383,12 @@ def _resolve_jlink_exe(preferred: Optional[str] = None) -> str:
         if os.path.isfile(sibling):
             return sibling
 
-    # 2) PATH — primary cross-platform discovery
+    # 2) PATH — cross-platform auto-discovery
     path_exe = shutil.which(executable_name)
     if path_exe:
         return path_exe
 
-    # 3) Fallback: bare executable name
-    return executable_name
+    return None
 
 
 def _cmake_cached_generator(build_dir: str) -> Optional[str]:
@@ -1013,23 +1047,33 @@ def validate_environment(args: argparse.Namespace) -> bool:
         ok = False
 
     # SysConfig CLI (Called via shell script, internally launches node)
-    sysconfig_cli = os.path.join(args.sysconfig, _SYSCONFIG_CLI_NAME)
-    if not os.path.isfile(sysconfig_cli):
-        error(f"SysConfig CLI not found: {sysconfig_cli}")
-        error("Set SYSconfig_DIR env var or use --sysconfig to specify path")
+    if not args.sysconfig:
+        error("SysConfig not found. Set SYSCONFIG_DIR env var, or use --sysconfig to specify path")
+        error(f"Expected location: {_TI_BASE}/sysconfig_<version>/")
         ok = False
     else:
-        args._sysconfig_cli = sysconfig_cli
-        success(f"SysConfig CLI: {sysconfig_cli}")
+        sysconfig_cli = os.path.join(args.sysconfig, _SYSCONFIG_CLI_NAME)
+        if not os.path.isfile(sysconfig_cli):
+            error(f"SysConfig CLI not found: {sysconfig_cli}")
+            error("Set SYSCONFIG_DIR env var or use --sysconfig to specify path")
+            ok = False
+        else:
+            args._sysconfig_cli = sysconfig_cli
+            success(f"SysConfig CLI: {sysconfig_cli}")
 
     # SDK
-    product_json = os.path.join(args.sdk, ".metadata", "product.json")
-    if not os.path.isfile(product_json):
-        error(f"MSPM0 SDK not found (missing product.json): {args.sdk}")
-        error("Set MSPM0_SDK env var or use --sdk to specify path")
+    if not args.sdk:
+        error("MSPM0 SDK not found. Set MSPM0_SDK env var, or use --sdk to specify path")
+        error(f"Expected location: {_TI_BASE}/mspm0_sdk_<version>/")
         ok = False
     else:
-        success(f"MSPM0 SDK: {args.sdk}")
+        product_json = os.path.join(args.sdk, ".metadata", "product.json")
+        if not os.path.isfile(product_json):
+            error(f"MSPM0 SDK not found (missing product.json): {args.sdk}")
+            error("Set MSPM0_SDK env var or use --sdk to specify path")
+            ok = False
+        else:
+            success(f"MSPM0 SDK: {args.sdk}")
 
     # If syscfg file provided, verify it exists
     if args.syscfg:
@@ -1119,39 +1163,47 @@ def cmd_check(args: argparse.Namespace):
 
     # 6) ARM GDB
     gdb = _resolve_gdb_exe()
-    gdb_ok = os.path.isfile(gdb) or shutil.which(gdb) is not None
+    gdb_ok = gdb is not None and (os.path.isfile(gdb) or shutil.which(gdb) is not None)
     check_item("ARM GDB", gdb_ok, gdb if gdb_ok else "not found — install arm-none-eabi-gdb")
 
     # 7) SysConfig CLI
     sysconfig_dir = _resolve_sysconfig()
-    cli_path = os.path.join(sysconfig_dir, _SYSCONFIG_CLI_NAME)
-    cli_ok = os.path.isfile(cli_path)
-    check_item("SysConfig CLI", cli_ok,
-               cli_path if cli_ok else f"not found — install SysConfig to ~/ti/ (checked: {sysconfig_dir})")
+    if sysconfig_dir:
+        cli_path = os.path.join(sysconfig_dir, _SYSCONFIG_CLI_NAME)
+        cli_ok = os.path.isfile(cli_path)
+        check_item("SysConfig CLI", cli_ok,
+                   cli_path if cli_ok else f"not found — install SysConfig to {_TI_BASE}")
+    else:
+        check_item("SysConfig CLI", False,
+                   f"not found — set SYSCONFIG_DIR env var or install to {_TI_BASE}")
 
     # 8) MSPM0 SDK
     sdk_dir = _resolve_sdk()
-    product_json = os.path.join(sdk_dir, ".metadata", "product.json")
-    sdk_ok = os.path.isfile(product_json)
-    check_item("MSPM0 SDK", sdk_ok,
-               sdk_dir if sdk_ok else f"not found — install MSPM0 SDK to ~/ti/ (checked: {sdk_dir})")
+    if sdk_dir:
+        product_json = os.path.join(sdk_dir, ".metadata", "product.json")
+        sdk_ok = os.path.isfile(product_json)
+        check_item("MSPM0 SDK", sdk_ok,
+                   sdk_dir if sdk_ok else f"not found — install MSPM0 SDK to {_TI_BASE}")
+    else:
+        check_item("MSPM0 SDK", False,
+                   f"not found — set MSPM0_SDK env var or install to {_TI_BASE}")
 
     # 9) OpenOCD
     openocd = _resolve_openocd_exe()
-    openocd_ok = os.path.isfile(openocd) or shutil.which(openocd) is not None
+    openocd_ok = openocd is not None and (os.path.isfile(openocd) or shutil.which(openocd) is not None)
     check_item("OpenOCD", openocd_ok,
                openocd if openocd_ok else "not found — install via VSCode TI plugin or CCS Theia")
 
     # 10) JLink GDB Server (optional)
     jlink_gdb = _resolve_jlink_gdb_server_exe()
-    jlink_ok = os.path.isfile(jlink_gdb) or shutil.which(jlink_gdb) is not None
+    jlink_ok = jlink_gdb is not None and (os.path.isfile(jlink_gdb) or shutil.which(jlink_gdb) is not None)
     check_item("JLink GDB Server", jlink_ok,
                jlink_gdb if jlink_ok else "not found — install from https://www.segger.com/downloads/jlink/",
                required=False)
 
     # 11) JLinkExe (optional, for standalone flash)
     jlink_exe_cmd = _resolve_jlink_exe()
-    jlink_exe_ok = os.path.isfile(jlink_exe_cmd) or shutil.which(jlink_exe_cmd) is not None
+    jlink_exe_ok = jlink_exe_cmd is not None and (os.path.isfile(jlink_exe_cmd) or shutil.which(jlink_exe_cmd) is not None)
     check_item("JLinkExe", jlink_exe_ok,
                jlink_exe_cmd if jlink_exe_ok else "not found (bundled with JLink GDB Server)",
                required=False)
@@ -2474,6 +2526,13 @@ def cmd_new(args):
     # ── Build context ──
     ctx = _build_ctx(args, project_dir, chip, dl_meta)
 
+    # ── Validate debugger tools ──
+    if not _validate_debugger_tools(
+        ctx["debugger"], ctx["openocd_exe"], ctx["gdb_exe"],
+        ctx["jlink_gdb_server_exe"], ctx["jlink_exe"],
+    ):
+        sys.exit(1)
+
     # -- Step 5: Create directories --
     info("--- Step 5: Create directory structure ---")
     create_directories(project_dir, args.dry_run)
@@ -2499,7 +2558,7 @@ def cmd_new(args):
                      debugger=ctx["debugger"],
                      project_name=ctx["project_name"],
                      dry_run=args.dry_run,
-                     jlink_exe=ctx.get("jlink_exe", "JLinkExe"),
+                     jlink_exe=ctx.get("jlink_exe") or "",
                      device_name=ctx["device_name"])
     write_launch_json(project_dir, ctx, args.dry_run)
     write_cpp_properties(project_dir, ctx, args.dry_run)
@@ -2677,6 +2736,11 @@ def cmd_regenerate(args):
         gdb_exe = _resolve_gdb_exe(args.gdb)
         jlink_gdb = _resolve_jlink_gdb_server_exe(getattr(args, 'jlink_path', None))
         jlink_cmd = _resolve_jlink_exe(getattr(args, 'jlink_path', None))
+
+        # Validate required tools for the selected debugger
+        if not _validate_debugger_tools(args.debugger, openocd_exe, gdb_exe, jlink_gdb, jlink_cmd):
+            sys.exit(1)
+
         vscode_ctx = {
             "project_name": project_name,
             "project_dir": project_dir,
@@ -2699,7 +2763,7 @@ def cmd_regenerate(args):
                          debugger=args.debugger,
                          project_name=project_name,
                          dry_run=args.dry_run,
-                         jlink_exe=vscode_ctx.get("jlink_exe", "JLinkExe"),
+                         jlink_exe=jlink_cmd or "",
                          device_name=vscode_ctx["device_name"])
         write_launch_json(project_dir, vscode_ctx, args.dry_run)
         write_cpp_properties(project_dir, vscode_ctx, args.dry_run)
@@ -2771,6 +2835,45 @@ def _build_ctx(args, project_dir, chip, dl_meta):
         "cpu_freq_hz": dl_meta["cpu_freq_hz"],
         "pin_groups": dl_meta["pin_groups"],
     }
+
+
+def _validate_debugger_tools(debugger: str, openocd_exe: Optional[str], gdb_exe: Optional[str],
+                              jlink_gdb_server_exe: Optional[str], jlink_exe: Optional[str]) -> bool:
+    """Validate that required debugger tools are available for the selected debugger type.
+
+    Returns True if all required tools are found, False otherwise.
+    """
+    if debugger == "none":
+        return True
+
+    ok = True
+
+    # GDB is required for all debug modes
+    if not gdb_exe:
+        error("arm-none-eabi-gdb not found — required for debugging")
+        error("  Install: sudo apt install gdb-multiarch")
+        error("  Or set GDB_DIR env var to the directory containing arm-none-eabi-gdb")
+        ok = False
+
+    if debugger == "jlink-native":
+        # JLink native mode: requires JLinkGDBServerCLExe and JLinkExe
+        if not jlink_gdb_server_exe:
+            error("JLinkGDBServerCLExe not found — required for jlink-native debug mode")
+            error("  Install: https://www.segger.com/downloads/jlink/")
+            error("  Or set JLINK_DIR env var, or use --jlink-path to specify install directory")
+            ok = False
+        if not jlink_exe:
+            error("JLinkExe not found — required for jlink-native flash")
+            error("  JLinkExe is bundled with SEGGER JLink Software package")
+            ok = False
+    else:
+        # OpenOCD-based debuggers (cmsis-dap, xds110, jlink)
+        if not openocd_exe:
+            error(f"OpenOCD not found — required for {debugger} debug mode")
+            error("  Install via TI VSCode plugin (CCS Theia) or set OPENOCD_DIR env var")
+            ok = False
+
+    return ok
 
 
 # =============================================================================
