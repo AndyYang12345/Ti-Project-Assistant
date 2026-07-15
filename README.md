@@ -39,7 +39,7 @@ cmake --build build -j$(nproc)
 
 # 3. 调试（VSCode）
 code .
-# 按 F5 → 选择 CMSIS-DAP / XDS110 / JLink / JLink Native
+# 按 F5 → 选择 CMSIS-DAP / XDS110 / JLink
 ```
 
 修改配置后：
@@ -69,7 +69,7 @@ mspm0-init regenerate    # 仅更新生成文件，src/ 下手写代码安全无
 - 生成 `.vscode/` 全套配置（`launch.json` / `tasks.json` / `settings.json` / `c_cpp_properties.json`）
 - 内置 `⚙️ 打开 TI SysConfig` VSCode 任务，一键启动图形化配置
 - 支持 [Task Buttons](https://marketplace.visualstudio.com/items?itemName=spencerwmiles.vscode-task-buttons) 插件，状态栏直接点击 SysConfig / Build / Clean
-- 支持 **5 种调试器**：CMSIS-DAP、XDS110、JLink (OpenOCD 兼容)、**JLink Native**（Segger 原生 GDB Server）、无调试器
+- 支持 **4 种调试器**：CMSIS-DAP、XDS110、JLink（原生 Segger GDB Server）、无调试器
 - **跨平台工具自动发现**：可执行工具优先从 PATH 读取（Windows/Linux/macOS 一致），环境变量作为回退
 - 自动 cmake configure + build 验证
 - 自动 `git init` + 写入 `.gitignore`（检测到 Git 已安装时启用，可用 `--no-git` 跳过）
@@ -131,10 +131,10 @@ sudo apt install python3 gcc-arm-none-eabi cmake ninja-build
 
 ```
 1. CLI 参数           (--openocd / --gdb / --jlink-path)    ← 显式指定
-2. PATH               (shutil.which)                         ← 主力，跨平台一致
-3. 环境变量           (OPENOCD_DIR / GDB_DIR / JLINK_DIR)    ← PATH 找不到时回退
-4. TI 插件缓存 / 平台特定路径                                ← 自动发现
-5. 历史遗留路径       (TI_ROOT / CCS_BASE)                   ← 最终兜底
+2. 环境变量           (OPENOCD_DIR / GDB_DIR / JLINK_DIR)    ← 手动配置
+3. PATH               (shutil.which)                         ← 跨平台自动发现
+4. TI 插件缓存 / 平台特定路径                                ← 兜底扫描
+5. 历史遗留路径       (TI_ROOT / CCS_BASE)                   ← 最后手段
 ```
 
 ### 推荐配置
@@ -189,8 +189,7 @@ mspm0-init regenerate /path/to/proj # 指定项目路径
 更换调试器无需重建项目：
 ```bash
 mspm0-init regenerate -d xds110        # 从 CMSIS-DAP 切换到 XDS110
-mspm0-init regenerate -d jlink          # 切换到 JLink (OpenOCD)
-mspm0-init regenerate -d jlink-native   # 切换到 JLink Native (Segger 原生)
+mspm0-init regenerate -d jlink          # 切换到 JLink（原生 Segger GDB Server）
 ```
 
 ### 全部参数
@@ -202,7 +201,7 @@ mspm0-init new [syscfg] -n NAME [选项]
   -o, --output DIR       输出目录（默认 ./<name>/）
   -s, --sdk PATH         MSPM0 SDK 路径
   --sysconfig PATH       SysConfig 安装目录
-  -d, --debugger TYPE    cmsis-dap（默认）| xds110 | jlink | jlink-native | none
+  -d, --debugger TYPE    cmsis-dap（默认）| xds110 | jlink | none
   --jlink-path PATH      JLink 安装路径（可选，PATH 优先）
   --device DEVICE        手动指定芯片，如 MSPM0G3507
   --package PACKAGE      手动指定封装，如 LQFP-48(PT)
@@ -212,7 +211,7 @@ mspm0-init new [syscfg] -n NAME [选项]
 
 mspm0-init regenerate [项目目录] [选项]
 
-  -d, --debugger TYPE    更换调试器：cmsis-dap | xds110 | jlink | jlink-native | none
+  -d, --debugger TYPE    更换调试器：cmsis-dap | xds110 | jlink | none
   --jlink-path PATH      JLink 安装路径（可选，PATH 优先）
   --no-build             跳过重编译
   --no-backup            不备份旧文件
@@ -299,8 +298,8 @@ mspm0-init
 │   └── DeviceFamily.h ──────── 芯片系列宏
 ├── arm-none-eabi-gcc 13.x ──── 交叉编译
 ├── CMake + Ninja ───────────── 构建系统
-├── OpenOCD 1.3.x ───────────── GDB Server + 烧录（JLink 可走 OpenOCD 驱动）
-├── JLink 7.x+ (可选) ───────── 原生 GDB Server + 烧录（jlink-native 模式）
+├── OpenOCD 1.3.x (可选) ────── GDB Server + 烧录（cmsis-dap / xds110 必装）
+├── JLink 7.x+ ──────────────── 原生 GDB Server + 烧录（jlink 模式，推荐 ≥ 7.70）
 ├── arm-none-eabi-gdb 14.x ──── 源码级调试
 ├── Git ──────────────────────── 版本控制（自动初始化）
 └── VS Code + Cortex-Debug ──── IDE 集成

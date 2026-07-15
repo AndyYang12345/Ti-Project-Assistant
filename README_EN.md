@@ -39,7 +39,7 @@ cmake --build build -j$(nproc)
 
 # 3. Debug (VSCode)
 code .
-# Press F5 → choose CMSIS-DAP, XDS110, JLink, or JLink Native
+# Press F5 → choose CMSIS-DAP, XDS110, or JLink
 ```
 
 After modifying config:
@@ -69,7 +69,7 @@ The script automates:
 - Generates `.vscode/` configs (`launch.json` / `tasks.json` / `settings.json` / `c_cpp_properties.json`)
 - Built-in `⚙️ 打开 TI SysConfig` VSCode task to launch the GUI configurator in one click
 - Supports [Task Buttons](https://marketplace.visualstudio.com/items?itemName=spencerwmiles.vscode-task-buttons) extension — SysConfig / Build / Clean buttons directly in the status bar
-- Supports **5 debuggers**: CMSIS-DAP, XDS110, JLink (OpenOCD), **JLink Native** (Segger native GDB Server), none
+- Supports **4 debuggers**: CMSIS-DAP, XDS110, JLink (native Segger GDB Server), none
 - **Cross-platform tool auto-discovery**: executables resolved from PATH first (Windows/Linux/macOS consistent), env vars as fallback
 - Auto cmake configure + build verification
 - Auto `git init` + `.gitignore` (enabled when Git is detected; skip with `--no-git`)
@@ -131,9 +131,9 @@ All are **optional**. The tool auto-discovers executables from PATH, and searche
 
 ```
 1. CLI arg            (--openocd / --gdb / --jlink-path)     ← explicit override
-2. PATH               (shutil.which)                          ← primary, cross-platform
-3. Env var            (OPENOCD_DIR / GDB_DIR / JLINK_DIR)     ← fallback when not on PATH
-4. TI plugin cache / platform-specific paths                  ← auto-discovery
+2. Env var            (OPENOCD_DIR / GDB_DIR / JLINK_DIR)     ← manual configuration
+3. PATH               (shutil.which)                          ← cross-platform auto-discovery
+4. TI plugin cache / platform-specific paths                  ← fallback scan
 5. Legacy paths       (TI_ROOT / CCS_BASE)                    ← last resort
 ```
 
@@ -189,8 +189,7 @@ mspm0-init regenerate /path/to/proj # specify path
 Change debugger without recreating the project:
 ```bash
 mspm0-init regenerate -d xds110        # Switch from CMSIS-DAP to XDS110
-mspm0-init regenerate -d jlink          # Switch to JLink (OpenOCD)
-mspm0-init regenerate -d jlink-native   # Switch to JLink Native (Segger)
+mspm0-init regenerate -d jlink          # Switch to JLink (native Segger GDB Server)
 ```
 
 ### All options
@@ -202,7 +201,7 @@ mspm0-init new [syscfg] -n NAME [options]
   -o, --output DIR       Output directory (default: ./<name>/)
   -s, --sdk PATH         MSPM0 SDK path
   --sysconfig PATH       SysConfig install dir
-  -d, --debugger TYPE    cmsis-dap (default) | xds110 | jlink | jlink-native | none
+  -d, --debugger TYPE    cmsis-dap (default) | xds110 | jlink | none
   --jlink-path PATH      JLink install path (optional, PATH preferred)
   --device DEVICE        Specify chip manually, e.g. MSPM0G3507
   --package PACKAGE      Specify package, e.g. LQFP-48(PT)
@@ -212,7 +211,7 @@ mspm0-init new [syscfg] -n NAME [options]
 
 mspm0-init regenerate [project_dir] [options]
 
-  -d, --debugger TYPE    Change debugger: cmsis-dap | xds110 | jlink | jlink-native | none
+  -d, --debugger TYPE    Change debugger: cmsis-dap | xds110 | jlink | none
   --jlink-path PATH      JLink install path (optional, PATH preferred)
   --no-build             Skip rebuild
   --no-backup            Don't backup old files
@@ -299,8 +298,8 @@ mspm0-init
 │   └── DeviceFamily.h ──────── Chip family macros
 ├── arm-none-eabi-gcc 13.x ──── Cross-compiler
 ├── CMake + Ninja ───────────── Build system
-├── OpenOCD 1.3.x ───────────── GDB Server + flashing (JLink can go through OpenOCD)
-├── JLink 7.x+ (optional) ──── Native GDB Server + flashing (jlink-native mode)
+├── OpenOCD 1.3.x (optional) ── GDB Server + flashing (required for cmsis-dap / xds110)
+├── JLink 7.x+ ──────────────── Native GDB Server + flashing (jlink mode, ≥ 7.70 recommended)
 ├── arm-none-eabi-gdb 14.x ──── Source-level debug
 ├── Git ──────────────────────── Version control (auto-initialized)
 └── VS Code + Cortex-Debug ──── IDE integration

@@ -723,7 +723,7 @@ def _generate_minimal_lds(mem: dict, device: str) -> str:
     """)
 
 
-# Debugger OpenOCD config mapping
+# Debugger OpenOCD config mapping (cmsis-dap / xds110 only; jlink uses native GDB Server)
 DEBUGGER_CONFIG = {
     "cmsis-dap": {
         "configFiles": ["interface/cmsis-dap.cfg", "target/ti_mspm0.cfg"],
@@ -731,24 +731,19 @@ DEBUGGER_CONFIG = {
     "xds110": {
         "configFiles": ["interface/xds110.cfg", "target/ti_mspm0.cfg"],
     },
-    "jlink": {
-        "configFiles": ["interface/jlink.cfg", "target/ti_mspm0.cfg"],
-    },
 }
 
 # Debugger display labels (used in launch.json names and UI)
 DEBUGGER_LABELS = {
     "cmsis-dap": "CMSIS-DAP",
     "xds110": "XDS110",
-    "jlink": "JLink (OpenOCD)",
-    "jlink-native": "JLink (Native)",
+    "jlink": "JLink",
 }
 
-# Flash interface config mapping (OpenOCD-based debuggers only)
+# Flash interface config mapping (OpenOCD-based debuggers only; jlink uses JLinkExe)
 FLASH_INTERFACE_MAP = {
     "cmsis-dap": "interface/cmsis-dap.cfg",
     "xds110": "interface/xds110.cfg",
-    "jlink": "interface/jlink.cfg",
 }
 
 
@@ -837,7 +832,7 @@ def parse_args() -> argparse.Namespace:
     p_new.add_argument("-o", "--output", default=None, help="输出目录（默认 ./<项目名>/）")
     p_new.add_argument("-s", "--sdk", default=DEFAULT_SDK_DIR, help=f"MSPM0 SDK 路径 (默认: {DEFAULT_SDK_DIR})")
     p_new.add_argument("--sysconfig", default=DEFAULT_SYSCONFIG_DIR, help=f"SysConfig 安装目录 (默认: {DEFAULT_SYSCONFIG_DIR})")
-    p_new.add_argument("-d", "--debugger", choices=["cmsis-dap", "xds110", "jlink", "jlink-native", "none"], default="cmsis-dap", help="调试器类型：cmsis-dap (默认), xds110, jlink, jlink-native, none")
+    p_new.add_argument("-d", "--debugger", choices=["cmsis-dap", "xds110", "jlink", "none"], default="cmsis-dap", help="调试器类型：cmsis-dap (默认), xds110, jlink (原生 JLink GDB Server), none")
     p_new.add_argument("--device", default=None, help="手动指定芯片型号（如 MSPM0G3507）。SDK 支持的任意型号均可，无需硬编码")
     p_new.add_argument("--package", default=None, help="手动指定封装（如 LQFP-48(PT)）")
     p_new.add_argument(
@@ -899,9 +894,9 @@ def parse_args() -> argparse.Namespace:
     )
     p_regen.add_argument(
         "-d", "--debugger",
-        choices=["cmsis-dap", "xds110", "jlink", "jlink-native", "none"],
+        choices=["cmsis-dap", "xds110", "jlink", "none"],
         default="cmsis-dap",
-        help="调试器类型：cmsis-dap (默认), xds110, jlink, jlink-native, none",
+        help="调试器类型：cmsis-dap (默认), xds110, jlink (原生 JLink GDB Server), none",
     )
     p_regen.add_argument("--no-build", action="store_true", help="跳过重编译验证")
     p_regen.add_argument("--backup", action="store_true", default=True, help="覆盖前备份旧文件到 .sysconfig_backup/ (默认开启)")
@@ -951,17 +946,13 @@ def _build_help_epilog() -> str:
 
       -d cmsis-dap     板载 CMSIS-DAP 调试器（LaunchPad 默认）
       -d xds110        TI XDS110 调试器
-      -d jlink         SEGGER J-Link 调试器（通过 TI 定制版 OpenOCD 驱动）
-      -d jlink-native  SEGGER JLink 原生 GDB Server（推荐，绕过 OpenOCD 更稳定）
+      -d jlink         SEGGER J-Link 调试器（原生 GDB Server，需安装 JLink ≥ 7.70）
       -d none          不生成调试配置
 
-      JLink 两种模式对比:
-        -d jlink        使用 TI SDK 附带的 OpenOCD + interface/jlink.cfg
-                        无需额外安装，但稳定性受限于 OpenOCD 的 JLink 驱动
-        -d jlink-native 使用 Segger 官方 JLinkGDBServerCLExe，直接驱动 JLink
-                        需安装 Segger JLink Software Pack: https://www.segger.com/downloads/jlink/
-                        可通过 --jlink-path 指定安装目录，或设置 JLINK_DIR 环境变量
-                        烧录和调试稳定性显著优于 OpenOCD 通路
+      JLink 需要安装 Segger JLink Software Pack:
+        https://www.segger.com/downloads/jlink/
+        可通过 --jlink-path 指定安装目录，或设置 JLINK_DIR 环境变量
+        推荐 JLink V7.70+，部分盗版 JLink 在更低版本中无法正常烧录
 
     ── 芯片型号 (--device) ──────────────────────────────────────────────────────
 
@@ -1038,13 +1029,15 @@ def _build_help_epilog() -> str:
             ├── tasks.json            # 构建任务
             └── c_cpp_properties.json # IntelliSense 配置
 
-    ── 手动烧录 (OpenOCD) ───────────────────────────────────────────────────────
+    ── 手动烧录 ──────────────────────────────────────────────────────────────────
+
+      # CMSIS-DAP / XDS110 (OpenOCD)
       openocd -f interface/cmsis-dap.cfg -f target/ti_mspm0.cfg \\
         -c "program build/project.elf verify reset exit"
 
-      # JLink
-      openocd -f interface/jlink.cfg -f target/ti_mspm0.cfg \\
-        -c "program build/project.elf verify reset exit"
+      # JLink (原生)
+      JLinkExe -device MSPM0G3507 -if SWD -speed 4000 -autoconnect 1 \\
+        -CommanderScript .vscode/flash.jlink
 
     ══════════════════════════════════════════════════════════════════════════════
     """)
@@ -1213,25 +1206,27 @@ def cmd_check(args: argparse.Namespace):
         check_item("MSPM0 SDK", False,
                    f"not found — set MSPM0_SDK env var or install to {_TI_BASE}")
 
-    # 9) OpenOCD
-    openocd = _resolve_openocd_exe()
-    openocd_ok = openocd is not None and (os.path.isfile(openocd) or shutil.which(openocd) is not None)
-    check_item("OpenOCD", openocd_ok,
-               openocd if openocd_ok else "not found — install via VSCode TI plugin or CCS Theia")
-
-    # 10) JLink GDB Server (optional)
+    # 9) JLink GDB Server — required for -d jlink
     jlink_gdb = _resolve_jlink_gdb_server_exe()
     jlink_ok = jlink_gdb is not None and (os.path.isfile(jlink_gdb) or shutil.which(jlink_gdb) is not None)
     check_item("JLink GDB Server", jlink_ok,
                jlink_gdb if jlink_ok else "not found — install from https://www.segger.com/downloads/jlink/",
                required=False)
 
-    # 11) JLinkExe (optional, for standalone flash)
+    # 10) JLinkExe — required for -d jlink flash
     jlink_exe_cmd = _resolve_jlink_exe()
     jlink_exe_ok = jlink_exe_cmd is not None and (os.path.isfile(jlink_exe_cmd) or shutil.which(jlink_exe_cmd) is not None)
     check_item("JLinkExe", jlink_exe_ok,
                jlink_exe_cmd if jlink_exe_ok else "not found (bundled with JLink GDB Server)",
                required=False)
+
+    # 11) OpenOCD — required for cmsis-dap/xds110; optional if JLink is available
+    openocd = _resolve_openocd_exe()
+    openocd_ok = openocd is not None and (os.path.isfile(openocd) or shutil.which(openocd) is not None)
+    need_openocd = not (jlink_ok and jlink_exe_ok)  # JLink can substitute OpenOCD
+    check_item("OpenOCD", openocd_ok,
+               openocd if openocd_ok else "not found — install via VSCode TI plugin or CCS Theia",
+               required=need_openocd)
 
     # 12) Git (optional)
     git_bin = shutil.which("git")
@@ -1900,7 +1895,7 @@ def _build_tasks_json(sysconfig_nw: str, sysconfig_app: str, syscfg_file: str,
     ]
 
     # Flash task: JLink native or OpenOCD
-    if debugger == "jlink-native":
+    if debugger == "jlink":
         tasks.append({
             "label": "Flash MSPM0 (JLink)",
             "detail": "Flash firmware via JLink commander (standalone, no debug)",
@@ -2162,8 +2157,8 @@ def write_tasks_json(project_dir: str, sysconfig_cli: str = "", syscfg_name: str
     dest = os.path.join(project_dir, ".vscode", "tasks.json")
     if dry_run:
         info(f"[dry-run] Write .vscode/tasks.json")
-        # For jlink-native, also dry-run the commander script
-        if debugger == "jlink-native":
+        # For jlink, also dry-run the commander script
+        if debugger == "jlink":
             info(f"[dry-run] Write .vscode/flash.jlink")
         return
     sysconfig_dir = os.path.dirname(sysconfig_cli)
@@ -2186,8 +2181,8 @@ def write_tasks_json(project_dir: str, sysconfig_cli: str = "", syscfg_name: str
         f.write(content)
     info("  ✓ .vscode/tasks.json")
 
-    # For jlink-native, also write the commander script
-    if debugger == "jlink-native":
+    # For jlink, also write the commander script
+    if debugger == "jlink":
         write_flash_jlink(project_dir, project_name, dry_run)
 
 
@@ -2205,7 +2200,7 @@ def write_flash_jlink(project_dir: str, project_name: str, dry_run: bool = False
 
 def _write_jlink_native_launch_json(project_dir: str, ctx: dict, dry_run: bool = False):
     """Write launch.json using the JLink native (servertype: jlink) template."""
-    debugger_label = DEBUGGER_LABELS["jlink-native"]
+    debugger_label = DEBUGGER_LABELS["jlink"]
     svd_file = _resolve_svd_file(ctx["sdk_dir"], ctx["device_name"])
 
     content = JLINK_LAUNCH_JSON_TEMPLATE.format(
@@ -2220,11 +2215,11 @@ def _write_jlink_native_launch_json(project_dir: str, ctx: dict, dry_run: bool =
 
     dest = os.path.join(project_dir, ".vscode", "launch.json")
     if dry_run:
-        info(f"[dry-run] Write .vscode/launch.json (jlink-native)")
+        info(f"[dry-run] Write .vscode/launch.json (jlink)")
         return
     with open(dest, "w", encoding="utf-8") as f:
         f.write(content)
-    info("  ✓ .vscode/launch.json (jlink-native)")
+    info("  ✓ .vscode/launch.json (jlink)")
 
 
 def write_launch_json(project_dir: str, ctx: dict, dry_run: bool = False):
@@ -2235,11 +2230,11 @@ def write_launch_json(project_dir: str, ctx: dict, dry_run: bool = False):
         return
 
     # JLink native uses a separate template (servertype: jlink)
-    if debugger == "jlink-native":
+    if debugger == "jlink":
         _write_jlink_native_launch_json(project_dir, ctx, dry_run)
         return
 
-    # OpenOCD-based debuggers (cmsis-dap, xds110, jlink)
+    # OpenOCD-based debuggers (cmsis-dap, xds110)
     dbg_cfg = DEBUGGER_CONFIG[debugger]
     config_files = ",\n                ".join(
         f'"{f}"' for f in dbg_cfg["configFiles"]
@@ -2413,7 +2408,7 @@ def print_summary(ctx: dict):
 
     # Flash command varies by debugger type
     debugger = ctx["debugger"]
-    if debugger == "jlink-native":
+    if debugger == "jlink":
         flash_section = f"""\
   Flash (JLink):
     JLinkExe -device {ctx['device_name']} -if SWD -speed 4000 -autoconnect 1 \\
@@ -2880,19 +2875,19 @@ def _validate_debugger_tools(debugger: str, openocd_exe: Optional[str], gdb_exe:
         error("  Or set GDB_DIR env var to the directory containing arm-none-eabi-gdb")
         ok = False
 
-    if debugger == "jlink-native":
+    if debugger == "jlink":
         # JLink native mode: requires JLinkGDBServerCLExe and JLinkExe
         if not jlink_gdb_server_exe:
-            error("JLinkGDBServerCLExe not found — required for jlink-native debug mode")
+            error("JLinkGDBServerCLExe not found — required for jlink debug mode")
             error("  Install: https://www.segger.com/downloads/jlink/")
             error("  Or set JLINK_DIR env var, or use --jlink-path to specify install directory")
             ok = False
         if not jlink_exe:
-            error("JLinkExe not found — required for jlink-native flash")
+            error("JLinkExe not found — required for jlink flash")
             error("  JLinkExe is bundled with SEGGER JLink Software package")
             ok = False
     else:
-        # OpenOCD-based debuggers (cmsis-dap, xds110, jlink)
+        # OpenOCD-based debuggers (cmsis-dap, xds110)
         if not openocd_exe:
             error(f"OpenOCD not found — required for {debugger} debug mode")
             error("  Install via TI VSCode plugin (CCS Theia) or set OPENOCD_DIR env var")
