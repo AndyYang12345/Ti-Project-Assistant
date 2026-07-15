@@ -149,26 +149,39 @@ def _candidate_tool_path(path: Optional[str], executable_name: str) -> Optional[
 
 
 def _resolve_openocd_exe(preferred: Optional[str] = None) -> str:
-    """Resolve OpenOCD executable path, preferring the TI cache root first."""
+    """Resolve OpenOCD executable — PATH first, then env vars and fallbacks.
+
+    Unified cross-platform priority:
+      1. CLI arg (--openocd / --openocd-path)
+      2. PATH (shutil.which) — primary, works on both Windows and Linux
+      3. OPENOCD_DIR env var — manual override when not on PATH
+      4. TI embedded-debug cache — auto-discovered from VSCode plugin / CCS
+      5. TI_ROOT / CCS_BASE — legacy
+    """
     executable_name = "openocd.exe" if IS_WIN else "openocd"
 
+    # 1) User-specified --openocd / --openocd-path
     manual = _candidate_tool_path(preferred, executable_name)
     if manual:
         return manual
 
+    # 2) PATH — primary cross-platform discovery
+    path_exe = shutil.which(executable_name)
+    if path_exe:
+        return path_exe
+
+    # 3) OPENOCD_DIR environment variable (manual override)
+    env_path = _candidate_tool_path(os.environ.get("OPENOCD_DIR"), executable_name)
+    if env_path:
+        return env_path
+
+    # 4) TI embedded-debug cache (fallback — VSCode plugin / CCS Theia)
     for root in _tool_cache_roots():
         discovered = _discover_file(root, executable_name)
         if discovered:
             return discovered
 
-    env_path = _candidate_tool_path(os.environ.get("OPENOCD_DIR"), executable_name)
-    if env_path:
-        return env_path
-
-    path_exe = shutil.which(executable_name)
-    if path_exe:
-        return path_exe
-
+    # 5) TI_ROOT / CCS_BASE (legacy)
     for root in filter(None, [os.environ.get("TI_ROOT"), os.environ.get("CCS_BASE")]):
         discovered = _discover_file(root, executable_name)
         if discovered:
@@ -178,26 +191,45 @@ def _resolve_openocd_exe(preferred: Optional[str] = None) -> str:
 
 
 def _resolve_gdb_exe(preferred: Optional[str] = None) -> str:
-    """Resolve arm-none-eabi-gdb executable path, preferring the TI cache root first."""
+    """Resolve arm-none-eabi-gdb executable — PATH first, then env vars and fallbacks.
+
+    Unified cross-platform priority:
+      1. CLI arg (--gdb / --gdb-path)
+      2. PATH (shutil.which) — primary, works on both Windows and Linux
+      3. GDB_DIR env var — manual override when not on PATH
+      4. TI embedded-debug cache — auto-discovered from VSCode plugin / CCS
+      5. gdb-multiarch — common Debian/Ubuntu fallback (apt install gdb-multiarch)
+      6. TI_ROOT / CCS_BASE — legacy
+    """
     executable_name = "arm-none-eabi-gdb.exe" if IS_WIN else "arm-none-eabi-gdb"
 
+    # 1) User-specified --gdb / --gdb-path
     manual = _candidate_tool_path(preferred, executable_name)
     if manual:
         return manual
 
+    # 2) PATH — primary cross-platform discovery
+    path_exe = shutil.which(executable_name)
+    if path_exe:
+        return path_exe
+
+    # 3) GDB_DIR environment variable (manual override)
+    env_path = _candidate_tool_path(os.environ.get("GDB_DIR"), executable_name)
+    if env_path:
+        return env_path
+
+    # 4) TI embedded-debug cache (fallback — VSCode plugin / CCS Theia)
     for root in _tool_cache_roots():
         discovered = _discover_file(root, executable_name)
         if discovered:
             return discovered
 
-    env_path = _candidate_tool_path(os.environ.get("GDB_DIR"), executable_name)
-    if env_path:
-        return env_path
+    # 5) gdb-multiarch — common Debian/Ubuntu fallback (apt install gdb-multiarch)
+    gdb_ma = shutil.which("gdb-multiarch")
+    if gdb_ma:
+        return gdb_ma
 
-    path_exe = shutil.which(executable_name)
-    if path_exe:
-        return path_exe
-
+    # 6) TI_ROOT / CCS_BASE (legacy)
     for root in filter(None, [os.environ.get("TI_ROOT"), os.environ.get("CCS_BASE")]):
         discovered = _discover_file(root, executable_name)
         if discovered:
@@ -244,7 +276,87 @@ def _resolve_openocd_scripts(openocd_exe: str) -> str:
                     return candidate
 
     return ""
-    
+
+
+def _iter_jlink_dirs() -> list:
+    """Yield potential SEGGER JLink installation directories (latest first)."""
+    dirs: list = []
+    base = "/opt/SEGGER"
+    if os.path.isdir(base):
+        for d in sorted(os.listdir(base), reverse=True):
+            if re.match(r"^JLink", d):
+                dirs.append(os.path.join(base, d))
+    return dirs
+
+
+def _resolve_jlink_gdb_server_exe(preferred: Optional[str] = None) -> str:
+    """Resolve JLinkGDBServerCLExe — PATH first, then env vars and fallbacks.
+
+    Unified cross-platform priority:
+      1. CLI arg (--jlink / --jlink-path)
+      2. PATH (shutil.which) — primary, works on both Windows and Linux
+      3. JLINK_DIR env var — manual override when not on PATH
+      4. Platform-specific well-known install directories
+    """
+    executable_name = "JLinkGDBServerCLExe.exe" if IS_WIN else "JLinkGDBServerCLExe"
+
+    # 1) User-specified --jlink-path
+    manual = _candidate_tool_path(preferred, executable_name)
+    if manual:
+        return manual
+
+    # 2) PATH — primary cross-platform discovery
+    path_exe = shutil.which(executable_name)
+    if path_exe:
+        return path_exe
+
+    # 3) JLINK_DIR environment variable (manual override)
+    env_path = _candidate_tool_path(os.environ.get("JLINK_DIR"), executable_name)
+    if env_path:
+        return env_path
+
+    # 4) Platform-specific well-known install directories
+    if IS_WIN:
+        for base in [r"C:\Program Files\SEGGER\JLink",
+                     r"C:\Program Files (x86)\SEGGER\JLink"]:
+            candidate = os.path.join(base, executable_name)
+            if os.path.isfile(candidate):
+                return candidate
+    else:
+        for jlink_dir in _iter_jlink_dirs():
+            candidate = os.path.join(jlink_dir, executable_name)
+            if os.path.isfile(candidate):
+                return candidate
+
+    # 5) Fallback: bare executable name
+    return executable_name
+
+
+def _resolve_jlink_exe(preferred: Optional[str] = None) -> str:
+    """Resolve JLinkExe — PATH first, deriving from GDB server as fallback.
+
+    Unified cross-platform priority:
+      1. CLI arg (--jlink / --jlink-path) — derives sibling from resolved GDB server
+      2. PATH (shutil.which) — primary, works on both Windows and Linux
+    """
+    executable_name = "JLinkExe.exe" if IS_WIN else "JLinkExe"
+
+    # 1) Derive from the resolved GDB server path (same install directory)
+    gdb_server = _resolve_jlink_gdb_server_exe(preferred)
+    if gdb_server and os.path.isfile(gdb_server):
+        sibling = os.path.join(os.path.dirname(gdb_server), executable_name)
+        if os.path.isfile(sibling):
+            return sibling
+
+    # 2) PATH — primary cross-platform discovery
+    path_exe = shutil.which(executable_name)
+    if path_exe:
+        return path_exe
+
+    # 3) Fallback: bare executable name
+    return executable_name
+
+
 def _cmake_cached_generator(build_dir: str) -> Optional[str]:
     """Read the generator recorded in an existing CMakeCache.txt, if any."""
     cache_file = os.path.join(build_dir, "CMakeCache.txt")
@@ -565,6 +677,21 @@ DEBUGGER_CONFIG = {
     },
 }
 
+# Debugger display labels (used in launch.json names and UI)
+DEBUGGER_LABELS = {
+    "cmsis-dap": "CMSIS-DAP",
+    "xds110": "XDS110",
+    "jlink": "JLink (OpenOCD)",
+    "jlink-native": "JLink (Native)",
+}
+
+# Flash interface config mapping (OpenOCD-based debuggers only)
+FLASH_INTERFACE_MAP = {
+    "cmsis-dap": "interface/cmsis-dap.cfg",
+    "xds110": "interface/xds110.cfg",
+    "jlink": "interface/jlink.cfg",
+}
+
 
 # =============================================================================
 # ANSI colors
@@ -651,7 +778,7 @@ def parse_args() -> argparse.Namespace:
     p_new.add_argument("-o", "--output", default=None, help="输出目录（默认 ./<项目名>/）")
     p_new.add_argument("-s", "--sdk", default=DEFAULT_SDK_DIR, help=f"MSPM0 SDK 路径 (默认: {DEFAULT_SDK_DIR})")
     p_new.add_argument("--sysconfig", default=DEFAULT_SYSCONFIG_DIR, help=f"SysConfig 安装目录 (默认: {DEFAULT_SYSCONFIG_DIR})")
-    p_new.add_argument("-d", "--debugger", choices=["cmsis-dap", "xds110", "jlink", "none"], default="cmsis-dap", help="调试器类型：cmsis-dap (默认), xds110, jlink, none")
+    p_new.add_argument("-d", "--debugger", choices=["cmsis-dap", "xds110", "jlink", "jlink-native", "none"], default="cmsis-dap", help="调试器类型：cmsis-dap (默认), xds110, jlink, jlink-native, none")
     p_new.add_argument("--device", default=None, help="手动指定芯片型号（如 MSPM0G3507）。SDK 支持的任意型号均可，无需硬编码")
     p_new.add_argument("--package", default=None, help="手动指定封装（如 LQFP-48(PT)）")
     p_new.add_argument(
@@ -663,6 +790,11 @@ def parse_args() -> argparse.Namespace:
         "--gdb", "--gdb-path",
         dest="gdb", default=None,
         help="arm-none-eabi-gdb 可执行文件或目录；覆盖自动搜索（通常无需设置）",
+    )
+    p_new.add_argument(
+        "--jlink", "--jlink-path",
+        dest="jlink_path", default=None,
+        help="SEGGER JLink 安装目录或 JLinkGDBServerCLExe 路径；覆盖自动搜索",
     )
     p_new.add_argument("--dry-run", action="store_true", help="预览模式：仅显示操作，不创建文件")
     p_new.add_argument("--no-build", action="store_true", help="跳过 cmake configure + build 验证")
@@ -702,10 +834,15 @@ def parse_args() -> argparse.Namespace:
         help="arm-none-eabi-gdb 可执行文件或目录",
     )
     p_regen.add_argument(
+        "--jlink", "--jlink-path",
+        dest="jlink_path", default=None,
+        help="SEGGER JLink 安装目录或 JLinkGDBServerCLExe 路径",
+    )
+    p_regen.add_argument(
         "-d", "--debugger",
-        choices=["cmsis-dap", "xds110", "jlink", "none"],
+        choices=["cmsis-dap", "xds110", "jlink", "jlink-native", "none"],
         default="cmsis-dap",
-        help="调试器类型：cmsis-dap (默认), xds110, jlink, none",
+        help="调试器类型：cmsis-dap (默认), xds110, jlink, jlink-native, none",
     )
     p_regen.add_argument("--no-build", action="store_true", help="跳过重编译验证")
     p_regen.add_argument("--backup", action="store_true", default=True, help="覆盖前备份旧文件到 .sysconfig_backup/ (默认开启)")
@@ -753,14 +890,19 @@ def _build_help_epilog() -> str:
 
     ── 调试器选项 (-d) ─────────────────────────────────────────────────────────
 
-      -d cmsis-dap    板载 CMSIS-DAP 调试器（LaunchPad 默认）
-      -d xds110       TI XDS110 调试器
-      -d jlink        SEGGER J-Link 调试器（需 TI 定制版 OpenOCD）
-      -d none         不生成调试配置
+      -d cmsis-dap     板载 CMSIS-DAP 调试器（LaunchPad 默认）
+      -d xds110        TI XDS110 调试器
+      -d jlink         SEGGER J-Link 调试器（通过 TI 定制版 OpenOCD 驱动）
+      -d jlink-native  SEGGER JLink 原生 GDB Server（推荐，绕过 OpenOCD 更稳定）
+      -d none          不生成调试配置
 
-      JLink 注意：当前 TI SDK 附带的 OpenOCD 已包含 interface/jlink.cfg，
-      直接 -d jlink 即可使用。如使用 Segger 官方 JLink GDB Server，需手动修改
-      生成的 .vscode/launch.json。
+      JLink 两种模式对比:
+        -d jlink        使用 TI SDK 附带的 OpenOCD + interface/jlink.cfg
+                        无需额外安装，但稳定性受限于 OpenOCD 的 JLink 驱动
+        -d jlink-native 使用 Segger 官方 JLinkGDBServerCLExe，直接驱动 JLink
+                        需安装 Segger JLink Software Pack: https://www.segger.com/downloads/jlink/
+                        可通过 --jlink-path 指定安装目录，或设置 JLINK_DIR 环境变量
+                        烧录和调试稳定性显著优于 OpenOCD 通路
 
     ── 芯片型号 (--device) ──────────────────────────────────────────────────────
 
@@ -783,8 +925,13 @@ def _build_help_epilog() -> str:
       MSPM0_SDK        MSPM0 SDK 根目录  (默认: ~/ti/mspm0_sdk_*/)
       SYSCONFIG_DIR    SysConfig 安装目录 (默认: ~/ti/sysconfig_*/)
       TI_ROOT          TI 工具根目录      (Linux: ~/ti, Windows: C:\\ti)
-      OPENOCD_DIR      OpenOCD 目录或可执行文件
-      GDB_DIR          arm-none-eabi-gdb 目录
+      OPENOCD_DIR      OpenOCD 目录或可执行文件（PATH 查找失败时的备用方案）
+      GDB_DIR          arm-none-eabi-gdb 目录（PATH 查找失败时的备用方案）
+      JLINK_DIR        SEGGER JLink 安装目录（PATH 查找失败时的备用方案）
+
+      可执行工具 (openocd, arm-none-eabi-gdb, JLink*) 优先从 PATH 查找，
+      Windows 和 Linux 行为一致。仅在 PATH 找不到时才回退到以上环境变量
+      或 TI 插件缓存路径。SDK/目录类资源始终优先使用环境变量。
 
       推荐在 ~/.zshrc 或 ~/.bashrc 中配置:
         export MSPM0_SDK=~/ti/mspm0_sdk_2_10_00_04
@@ -995,7 +1142,21 @@ def cmd_check(args: argparse.Namespace):
     check_item("OpenOCD", openocd_ok,
                openocd if openocd_ok else "not found — install via VSCode TI plugin or CCS Theia")
 
-    # 10) Git (optional)
+    # 10) JLink GDB Server (optional)
+    jlink_gdb = _resolve_jlink_gdb_server_exe()
+    jlink_ok = os.path.isfile(jlink_gdb) or shutil.which(jlink_gdb) is not None
+    check_item("JLink GDB Server", jlink_ok,
+               jlink_gdb if jlink_ok else "not found — install from https://www.segger.com/downloads/jlink/",
+               required=False)
+
+    # 11) JLinkExe (optional, for standalone flash)
+    jlink_exe_cmd = _resolve_jlink_exe()
+    jlink_exe_ok = os.path.isfile(jlink_exe_cmd) or shutil.which(jlink_exe_cmd) is not None
+    check_item("JLinkExe", jlink_exe_ok,
+               jlink_exe_cmd if jlink_exe_ok else "not found (bundled with JLink GDB Server)",
+               required=False)
+
+    # 12) Git (optional)
     git_bin = shutil.which("git")
     check_item("Git", git_bin is not None,
                git_bin or "not found — 项目将不启用版本控制",
@@ -1580,7 +1741,10 @@ Thumbs.db
 # =============================================================================
 def _build_tasks_json(sysconfig_nw: str, sysconfig_app: str, syscfg_file: str,
                       openocd_exe: str, openocd_scripts: str,
-                      flash_interface: str, project_name: str) -> str:
+                      flash_interface: str, project_name: str,
+                      debugger: str = "cmsis-dap",
+                      jlink_exe: str = "JLinkExe",
+                      device_name: str = "") -> str:
     """Build tasks.json content as a properly-escaped JSON string.
 
     All path values are serialized via json.dumps(), which ensures that
@@ -1656,7 +1820,33 @@ def _build_tasks_json(sysconfig_nw: str, sysconfig_app: str, syscfg_file: str,
                 "panel": "shared"
             }
         },
-        {
+    ]
+
+    # Flash task: JLink native or OpenOCD
+    if debugger == "jlink-native":
+        tasks.append({
+            "label": "Flash MSPM0 (JLink)",
+            "detail": "Flash firmware via JLink commander (standalone, no debug)",
+            "type": "shell",
+            "command": jlink_exe,
+            "args": [
+                "-device", device_name,
+                "-if", "SWD",
+                "-speed", "4000",
+                "-autoconnect", "1",
+                "-CommanderScript", "${workspaceFolder}/.vscode/flash.jlink"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        })
+    else:
+        tasks.append({
             "label": "Flash MSPM0",
             "detail": "Flash firmware to device without entering debug mode",
             "type": "shell",
@@ -1675,8 +1865,8 @@ def _build_tasks_json(sysconfig_nw: str, sysconfig_app: str, syscfg_file: str,
                 "reveal": "always",
                 "panel": "shared"
             }
-        }
-    ]
+        })
+
     return json.dumps({"version": "2.0.0", "tasks": tasks}, indent=4, ensure_ascii=False)
 
 VSCode_SETTINGS_TEMPLATE = """\
@@ -1734,6 +1924,62 @@ LAUNCH_JSON_TEMPLATE = """\
         }}
     ]
 }}"""
+
+# Native JLink launch.json template (servertype: jlink, no OpenOCD)
+JLINK_LAUNCH_JSON_TEMPLATE = """\
+{{
+    "version": "0.2.0",
+    "configurations": [
+        {{
+            "name": "{device_name} Debug ({debugger_label})",
+            "cwd": "${{workspaceFolder}}",
+            "executable": "${{workspaceFolder}}/build/{project_name}.elf",
+            "request": "launch",
+            "type": "cortex-debug",
+            "runToEntryPoint": "main",
+            "servertype": "jlink",
+            "device": "{jlink_device}",
+            "interface": "swd",
+            "serverpath": "{server_path}",
+            "serialNumber": "",
+            "svdFile": "{svd_file}",
+            "serverArgs": ["-speed", "4000", "-singlerun"],
+            "gdbPath": "{gdb_path}"
+        }}
+    ]
+}}"""
+
+# JLinkExe commander script template for standalone flash
+FLASH_JLINK_TEMPLATE = """\
+loadfile build/{project_name}.elf
+r
+g
+exit
+"""
+
+
+def _resolve_svd_file(sdk_dir: str, device: str) -> str:
+    """Resolve the SVD file for a given device from the MSPM0 SDK.
+
+    Returns the file path if found, or an empty string.
+    SVD files provide peripheral register descriptions to the debugger.
+    """
+    part_lower = device.lower().rstrip("x")
+    # Standard MSPM0 SDK location: source/ti/devices/msp/m0p/svds/
+    candidate = os.path.join(
+        sdk_dir, "source", "ti", "devices", "msp", "m0p", "svds",
+        f"{part_lower}.svd",
+    )
+    if os.path.isfile(candidate):
+        return _posix_path(candidate)
+    # Try exact match (without x-stripping)
+    candidate2 = os.path.join(
+        sdk_dir, "source", "ti", "devices", "msp", "m0p", "svds",
+        f"{device.lower()}.svd",
+    )
+    if os.path.isfile(candidate2):
+        return _posix_path(candidate2)
+    return ""
 
 
 # =============================================================================
@@ -1828,7 +2074,9 @@ def write_main_h(project_dir: str, ctx: dict, dry_run: bool = False):
 def write_tasks_json(project_dir: str, sysconfig_cli: str = "", syscfg_name: str = "",
                      openocd_exe: str = "openocd", openocd_scripts: str = "",
                      debugger: str = "cmsis-dap", project_name: str = "",
-                     dry_run: bool = False):
+                     dry_run: bool = False,
+                     jlink_exe: str = "JLinkExe",
+                     device_name: str = ""):
     """Generate .vscode/tasks.json.
 
     Paths are serialized via json.dumps() so that Windows backslashes are
@@ -1837,15 +2085,14 @@ def write_tasks_json(project_dir: str, sysconfig_cli: str = "", syscfg_name: str
     dest = os.path.join(project_dir, ".vscode", "tasks.json")
     if dry_run:
         info(f"[dry-run] Write .vscode/tasks.json")
+        # For jlink-native, also dry-run the commander script
+        if debugger == "jlink-native":
+            info(f"[dry-run] Write .vscode/flash.jlink")
         return
     sysconfig_dir = os.path.dirname(sysconfig_cli)
     nw_bin = os.path.join(sysconfig_dir, "nw", _SYSCONFIG_NW_NAME)
     app_dir = os.path.join(sysconfig_dir, "app")
-    flash_interface = {
-        "cmsis-dap": "interface/cmsis-dap.cfg",
-        "xds110": "interface/xds110.cfg",
-        "jlink": "interface/jlink.cfg",
-    }.get(debugger, "interface/cmsis-dap.cfg")
+    flash_interface = FLASH_INTERFACE_MAP.get(debugger, "interface/cmsis-dap.cfg")
     content = _build_tasks_json(
         sysconfig_nw=nw_bin,
         sysconfig_app=app_dir,
@@ -1854,10 +2101,53 @@ def write_tasks_json(project_dir: str, sysconfig_cli: str = "", syscfg_name: str
         openocd_scripts=openocd_scripts,
         flash_interface=flash_interface,
         project_name=project_name,
+        debugger=debugger,
+        jlink_exe=jlink_exe,
+        device_name=device_name,
     )
     with open(dest, "w", encoding="utf-8") as f:
         f.write(content)
     info("  ✓ .vscode/tasks.json")
+
+    # For jlink-native, also write the commander script
+    if debugger == "jlink-native":
+        write_flash_jlink(project_dir, project_name, dry_run)
+
+
+def write_flash_jlink(project_dir: str, project_name: str, dry_run: bool = False):
+    """Generate .vscode/flash.jlink commander script for JLinkExe standalone flash."""
+    content = FLASH_JLINK_TEMPLATE.format(project_name=project_name)
+    dest = os.path.join(project_dir, ".vscode", "flash.jlink")
+    if dry_run:
+        info(f"[dry-run] Write .vscode/flash.jlink")
+        return
+    with open(dest, "w", encoding="utf-8") as f:
+        f.write(content)
+    info("  ✓ .vscode/flash.jlink")
+
+
+def _write_jlink_native_launch_json(project_dir: str, ctx: dict, dry_run: bool = False):
+    """Write launch.json using the JLink native (servertype: jlink) template."""
+    debugger_label = DEBUGGER_LABELS["jlink-native"]
+    svd_file = _resolve_svd_file(ctx["sdk_dir"], ctx["device_name"])
+
+    content = JLINK_LAUNCH_JSON_TEMPLATE.format(
+        device_name=ctx["device_name"],
+        debugger_label=debugger_label,
+        project_name=ctx["project_name"],
+        jlink_device=ctx["device_name"],
+        server_path=_posix_path(ctx["jlink_gdb_server_exe"]),
+        svd_file=_posix_path(svd_file) if svd_file else "",
+        gdb_path=_posix_path(ctx["gdb_exe"]),
+    )
+
+    dest = os.path.join(project_dir, ".vscode", "launch.json")
+    if dry_run:
+        info(f"[dry-run] Write .vscode/launch.json (jlink-native)")
+        return
+    with open(dest, "w", encoding="utf-8") as f:
+        f.write(content)
+    info("  ✓ .vscode/launch.json (jlink-native)")
 
 
 def write_launch_json(project_dir: str, ctx: dict, dry_run: bool = False):
@@ -1867,11 +2157,17 @@ def write_launch_json(project_dir: str, ctx: dict, dry_run: bool = False):
         info("  - Skip launch.json (debugger=none)")
         return
 
+    # JLink native uses a separate template (servertype: jlink)
+    if debugger == "jlink-native":
+        _write_jlink_native_launch_json(project_dir, ctx, dry_run)
+        return
+
+    # OpenOCD-based debuggers (cmsis-dap, xds110, jlink)
     dbg_cfg = DEBUGGER_CONFIG[debugger]
     config_files = ",\n                ".join(
         f'"{f}"' for f in dbg_cfg["configFiles"]
     )
-    debugger_label = {"cmsis-dap": "CMSIS-DAP", "xds110": "XDS110", "jlink": "JLink"}.get(debugger, debugger.upper())
+    debugger_label = DEBUGGER_LABELS.get(debugger, debugger.upper())
 
     openocd_bin = _posix_path(ctx["openocd_exe"])
     openocd_scripts = _posix_path(ctx.get("openocd_scripts", ""))
@@ -2038,6 +2334,22 @@ def print_summary(ctx: dict):
         pins = ", ".join(f"{p['name']}({p.get('iomux', p['define'])})" for p in grp["pins"])
         pin_summary += f"\n          {grp['name']} @ {grp['port']}: [{pins}]"
 
+    # Flash command varies by debugger type
+    debugger = ctx["debugger"]
+    if debugger == "jlink-native":
+        flash_section = f"""\
+  Flash (JLink):
+    JLinkExe -device {ctx['device_name']} -if SWD -speed 4000 -autoconnect 1 \\
+      -CommanderScript .vscode/flash.jlink"""
+    elif debugger in FLASH_INTERFACE_MAP:
+        iface = FLASH_INTERFACE_MAP[debugger]
+        flash_section = f"""\
+  Flash (OpenOCD):
+    openocd -f {iface} -f target/ti_mspm0.cfg \\
+      -c "program build/{ctx['project_name']}.elf verify reset exit\""""
+    else:
+        flash_section = "  Flash:      (configured in .vscode/tasks.json)"
+
     print(f"""
 {Color.BOLD}{Color.GREEN}╔══════════════════════════════════════════════════╗
 ║   MSPM0 project "{ctx['project_name']}" ready   ║
@@ -2053,9 +2365,7 @@ def print_summary(ctx: dict):
     cmake -B build -G {_CMAKE_GENERATOR} -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .
     cmake --build build -j$(nproc)
 
-  Flash (OpenOCD):
-    openocd -f interface/{ctx['debugger']}.cfg -f target/ti_mspm0.cfg \\
-      -c "program build/{ctx['project_name']}.elf verify reset exit"
+{flash_section}
 """)
 
 
@@ -2188,7 +2498,9 @@ def cmd_new(args):
                      openocd_scripts=ctx["openocd_scripts"],
                      debugger=ctx["debugger"],
                      project_name=ctx["project_name"],
-                     dry_run=args.dry_run)
+                     dry_run=args.dry_run,
+                     jlink_exe=ctx.get("jlink_exe", "JLinkExe"),
+                     device_name=ctx["device_name"])
     write_launch_json(project_dir, ctx, args.dry_run)
     write_cpp_properties(project_dir, ctx, args.dry_run)
     write_vscode_settings(project_dir, args.dry_run)
@@ -2363,6 +2675,8 @@ def cmd_regenerate(args):
         project_name = _extract_project_name_from_cmake(project_dir) or os.path.basename(project_dir)
         openocd_exe = _resolve_openocd_exe(args.openocd)
         gdb_exe = _resolve_gdb_exe(args.gdb)
+        jlink_gdb = _resolve_jlink_gdb_server_exe(getattr(args, 'jlink_path', None))
+        jlink_cmd = _resolve_jlink_exe(getattr(args, 'jlink_path', None))
         vscode_ctx = {
             "project_name": project_name,
             "project_dir": project_dir,
@@ -2371,6 +2685,8 @@ def cmd_regenerate(args):
             "openocd_exe": openocd_exe,
             "openocd_scripts": _resolve_openocd_scripts(openocd_exe),
             "gdb_exe": gdb_exe,
+            "jlink_gdb_server_exe": jlink_gdb,
+            "jlink_exe": jlink_cmd,
             "cpu": chip["cpu"],
             "device_name": chip["device_name"],
             "device_define": chip["device_define"],
@@ -2382,7 +2698,9 @@ def cmd_regenerate(args):
                          openocd_scripts=_resolve_openocd_scripts(openocd_exe),
                          debugger=args.debugger,
                          project_name=project_name,
-                         dry_run=args.dry_run)
+                         dry_run=args.dry_run,
+                         jlink_exe=vscode_ctx.get("jlink_exe", "JLinkExe"),
+                         device_name=vscode_ctx["device_name"])
         write_launch_json(project_dir, vscode_ctx, args.dry_run)
         write_cpp_properties(project_dir, vscode_ctx, args.dry_run)
 
@@ -2428,6 +2746,9 @@ def _extract_project_name_from_cmake(project_dir: str) -> Optional[str]:
 def _build_ctx(args, project_dir, chip, dl_meta):
     openocd_exe = _resolve_openocd_exe(args.openocd)
     gdb_exe = _resolve_gdb_exe(args.gdb)
+    jlink_path = getattr(args, 'jlink_path', None)
+    jlink_gdb_server_exe = _resolve_jlink_gdb_server_exe(jlink_path)
+    jlink_exe = _resolve_jlink_exe(jlink_path)
     return {
         "project_name": args.name,
         "project_dir": project_dir,
@@ -2437,6 +2758,8 @@ def _build_ctx(args, project_dir, chip, dl_meta):
         "openocd_exe": openocd_exe,
         "openocd_scripts": _resolve_openocd_scripts(openocd_exe),
         "gdb_exe": gdb_exe,
+        "jlink_gdb_server_exe": jlink_gdb_server_exe,
+        "jlink_exe": jlink_exe,
         "cpu": chip["cpu"],
         "startup": chip["startup"],
         "driverlib": chip["driverlib"],
