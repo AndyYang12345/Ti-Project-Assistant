@@ -313,13 +313,25 @@ def _resolve_openocd_scripts(openocd_exe: str) -> str:
 
 
 def _iter_jlink_dirs() -> list:
-    """Yield potential SEGGER JLink installation directories (latest first)."""
+    """Yield potential SEGGER JLink installation directories (latest first).
+
+    Cross-platform: scans both Linux (/opt/SEGGER) and Windows
+    (C:\\Program Files\\SEGGER) for versioned JLink directories
+    such as JLink_V960, JLink_V812, or the unversioned JLink.
+    """
     dirs: list = []
-    base = "/opt/SEGGER"
-    if os.path.isdir(base):
-        for d in sorted(os.listdir(base), reverse=True):
-            if re.match(r"^JLink", d):
-                dirs.append(os.path.join(base, d))
+    if IS_WIN:
+        for base in [r"C:\Program Files\SEGGER", r"C:\Program Files (x86)\SEGGER"]:
+            if os.path.isdir(base):
+                for d in sorted(os.listdir(base), reverse=True):
+                    if re.match(r"^JLink", d):
+                        dirs.append(os.path.join(base, d))
+    else:
+        base = "/opt/SEGGER"
+        if os.path.isdir(base):
+            for d in sorted(os.listdir(base), reverse=True):
+                if re.match(r"^JLink", d):
+                    dirs.append(os.path.join(base, d))
     return dirs
 
 
@@ -350,18 +362,11 @@ def _resolve_jlink_gdb_server_exe(preferred: Optional[str] = None) -> Optional[s
     if path_exe:
         return path_exe
 
-    # 4) Platform-specific well-known install directories
-    if IS_WIN:
-        for base in [r"C:\Program Files\SEGGER\JLink",
-                     r"C:\Program Files (x86)\SEGGER\JLink"]:
-            candidate = os.path.join(base, executable_name)
-            if os.path.isfile(candidate):
-                return candidate
-    else:
-        for jlink_dir in _iter_jlink_dirs():
-            candidate = os.path.join(jlink_dir, executable_name)
-            if os.path.isfile(candidate):
-                return candidate
+    # 4) Platform-specific well-known install directories (versioned + unversioned)
+    for jlink_dir in _iter_jlink_dirs():
+        candidate = os.path.join(jlink_dir, executable_name)
+        if os.path.isfile(candidate):
+            return candidate
 
     return None
 
