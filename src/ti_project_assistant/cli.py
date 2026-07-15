@@ -345,7 +345,8 @@ def _resolve_jlink_gdb_server_exe(preferred: Optional[str] = None) -> Optional[s
       4. Platform-specific well-known install directories
       Returns None if not found (caller reports the error).
     """
-    executable_name = "JLinkGDBServerCLExe.exe" if IS_WIN else "JLinkGDBServerCLExe"
+    # Linux: JLinkGDBServerCLExe  |  Windows: JLinkGDBServerCL.exe
+    executable_name = "JLinkGDBServerCL.exe" if IS_WIN else "JLinkGDBServerCLExe"
 
     # 1) User-specified --jlink-path
     manual = _candidate_tool_path(preferred, executable_name)
@@ -379,6 +380,7 @@ def _resolve_jlink_exe(preferred: Optional[str] = None) -> Optional[str]:
       2. PATH (shutil.which) — cross-platform auto-discovery
       Returns None if not found (caller reports the error).
     """
+    # Linux: JLinkExe  |  Windows: JLinkExe.exe
     executable_name = "JLinkExe.exe" if IS_WIN else "JLinkExe"
 
     # 1) Derive from the resolved GDB server path (same install directory)
