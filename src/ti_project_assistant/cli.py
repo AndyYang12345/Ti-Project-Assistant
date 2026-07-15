@@ -373,27 +373,45 @@ def _resolve_jlink_gdb_server_exe(preferred: Optional[str] = None) -> Optional[s
 
 
 def _resolve_jlink_exe(preferred: Optional[str] = None) -> Optional[str]:
-    """Resolve JLinkExe executable path.
+    """Resolve JLink commander executable path.
 
     Unified cross-platform priority:
       1. Derive from resolved GDB server path (same SEGGER install directory)
       2. PATH (shutil.which) — cross-platform auto-discovery
       Returns None if not found (caller reports the error).
-    """
-    # Linux: JLinkExe  |  Windows: JLinkExe.exe
-    executable_name = "JLinkExe.exe" if IS_WIN else "JLinkExe"
 
+    Naming notes (SEGGER V9+):
+      - Linux:   JLinkExe
+      - Windows: JLink.exe (V9+) or JLinkExe.exe (V8-)
+      Windows JLink.exe conflicts with Java JDK jlink.exe on case-insensitive
+      filesystems, so PATH resolution prefers the GDB-server-derived path.
+    """
     # 1) Derive from the resolved GDB server path (same install directory)
     gdb_server = _resolve_jlink_gdb_server_exe(preferred)
     if gdb_server and os.path.isfile(gdb_server):
-        sibling = os.path.join(os.path.dirname(gdb_server), executable_name)
-        if os.path.isfile(sibling):
-            return sibling
+        gdb_dir = os.path.dirname(gdb_server)
+        if IS_WIN:
+            # V9+: JLink.exe  |  V8-: JLinkExe.exe
+            for name in ("JLink.exe", "JLinkExe.exe"):
+                sibling = os.path.join(gdb_dir, name)
+                if os.path.isfile(sibling):
+                    return sibling
+        else:
+            sibling = os.path.join(gdb_dir, "JLinkExe")
+            if os.path.isfile(sibling):
+                return sibling
 
     # 2) PATH — cross-platform auto-discovery
-    path_exe = shutil.which(executable_name)
-    if path_exe:
-        return path_exe
+    if IS_WIN:
+        # Try old name first (no Java conflict), then new name
+        for name in ("JLinkExe.exe", "JLink.exe"):
+            path_exe = shutil.which(name)
+            if path_exe:
+                return path_exe
+    else:
+        path_exe = shutil.which("JLinkExe")
+        if path_exe:
+            return path_exe
 
     return None
 
