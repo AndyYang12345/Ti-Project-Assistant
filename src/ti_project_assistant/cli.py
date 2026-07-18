@@ -895,8 +895,8 @@ def parse_args() -> argparse.Namespace:
     p_regen.add_argument(
         "-d", "--debugger",
         choices=["cmsis-dap", "xds110", "jlink", "none"],
-        default="cmsis-dap",
-        help="调试器类型：cmsis-dap (默认), xds110, jlink (原生 JLink GDB Server), none",
+        default=None,
+        help="调试器类型（不指定则自动沿用当前项目配置）：cmsis-dap, xds110, jlink (原生 JLink GDB Server), none",
     )
     p_regen.add_argument("--no-build", action="store_true", help="跳过重编译验证")
     p_regen.add_argument("--backup", action="store_true", default=True, help="覆盖前备份旧文件到 .sysconfig_backup/ (默认开启)")
@@ -2610,6 +2610,50 @@ def cmd_new(args):
 
 
 # =============================================================================
+# Helper: detect current debugger from existing project config
+# =============================================================================
+def _detect_debugger_from_project(project_dir: str) -> Optional[str]:
+    """Detect the debugger type from an existing project's .vscode/launch.json.
+
+    Reads the first debug configuration and inspects ``servertype`` /
+    ``configFiles`` to determine the debugger type.
+
+    Returns one of ``"jlink"``, ``"xds110"``, ``"cmsis-dap"``, or ``None``
+    if the file is missing or unparseable.
+    """
+    launch_json = os.path.join(project_dir, ".vscode", "launch.json")
+    if not os.path.isfile(launch_json):
+        return None
+
+    try:
+        with open(launch_json, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    configs = data.get("configurations", [])
+    if not configs:
+        return None
+
+    cfg = configs[0]
+
+    # JLink native mode → servertype is "jlink"
+    if cfg.get("servertype") == "jlink":
+        return "jlink"
+
+    # OpenOCD-based → distinguish by interface config file
+    if cfg.get("servertype") == "openocd":
+        config_files = cfg.get("configFiles", [])
+        for cf in config_files:
+            if "xds110" in cf:
+                return "xds110"
+        # cmsis-dap is the default for openocd servertype
+        return "cmsis-dap"
+
+    return None
+
+
+# =============================================================================
 # cmd_regenerate() — Re-run SysConfig for an existing project
 # =============================================================================
 def cmd_regenerate(args):
@@ -2651,6 +2695,16 @@ def cmd_regenerate(args):
         sys.exit(1)
 
     success("Environment OK")
+
+    # ---- Detect debugger from existing project config (if not explicitly specified) ----
+    if args.debugger is None:
+        detected = _detect_debugger_from_project(project_dir)
+        if detected:
+            args.debugger = detected
+            info(f"Debugger: {detected} (auto-detected from existing project config)")
+        else:
+            args.debugger = "cmsis-dap"
+            info("Debugger: cmsis-dap (default, no existing config found)")
 
     # ---- Parse syscfg for device/package ----
     meta = parse_syscfg_metadata(syscfg_path)
