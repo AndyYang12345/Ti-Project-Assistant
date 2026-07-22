@@ -1033,7 +1033,7 @@ def _build_help_epilog() -> str:
 
       # CMSIS-DAP / XDS110 (OpenOCD)
       openocd -f interface/cmsis-dap.cfg -f target/ti_mspm0.cfg \\
-        -c "program build/project.elf verify reset exit"
+        -c "adapter speed 2000" -c "program build/project.elf reset exit"
 
       # JLink (原生)
       JLinkExe -device MSPM0G3507 -if SWD -speed 4000 -autoconnect 1 \\
@@ -1927,7 +1927,8 @@ def _build_tasks_json(sysconfig_nw: str, sysconfig_app: str, syscfg_file: str,
                 "-s", openocd_scripts,
                 "-f", flash_interface,
                 "-f", "target/ti_mspm0.cfg",
-                "-c", f"program build/{project_name}.elf verify reset exit"
+                "-c", "adapter speed 2000",
+                "-c", f"program build/{project_name}.elf reset exit"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -2418,7 +2419,7 @@ def print_summary(ctx: dict):
         flash_section = f"""\
   Flash (OpenOCD):
     openocd -f {iface} -f target/ti_mspm0.cfg \\
-      -c "program build/{ctx['project_name']}.elf verify reset exit\""""
+      -c "adapter speed 2000" -c "program build/{ctx['project_name']}.elf reset exit\""""
     else:
         flash_section = "  Flash:      (configured in .vscode/tasks.json)"
 
@@ -2875,7 +2876,7 @@ def _extract_project_name_from_cmake(project_dir: str) -> Optional[str]:
     if not os.path.isfile(cmake_file):
         return None
     content = _read_text_file(cmake_file)
-    match = re.search(r"project\s*\(\s*(\w+)", content)
+    match = re.search(r"project\s*\(\s*([\w-]+)", content)
     if match:
         return match.group(1)
     return None
