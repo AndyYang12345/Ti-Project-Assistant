@@ -2083,6 +2083,7 @@ CPP_PROPERTIES_TEMPLATE = """\
             "defines": [
                 {defines_json}
             ],
+            "compileCommands": "${{workspaceFolder}}/build/compile_commands.json",
             "intelliSenseMode": "linux-gcc-arm",
             "cStandard": "gnu11",
             "cppStandard": "gnu++14"
@@ -2791,6 +2792,18 @@ def cmd_regenerate(args):
     dl_config_h = os.path.join(project_dir, "config", "ti_msp_dl_config.h")
     dl_meta = parse_dl_config(dl_config_h)
     chip = resolve_chip(device, args.sdk)
+
+    # Correct device_define using the actual -D flag from device.opt.
+    # When .syscfg stores a family wildcard like MSPM0G350X, resolve_chip()
+    # yields __MSPM0G350__ (X stripped), but the compiler uses the precise
+    # variant from device.opt (e.g. __MSPM0G3505__).  Using the wrong define
+    # in c_cpp_properties.json causes IntelliSense "undefined identifier"
+    # errors even though the build succeeds.
+    device_opt_path = os.path.join(project_dir, "config", "device.opt")
+    opt_define = parse_device_opt(device_opt_path)
+    if opt_define and opt_define != chip["device_define"]:
+        info(f"Device define corrected: {chip['device_define']} -> {opt_define} (from device.opt)")
+        chip["device_define"] = opt_define
 
     if dl_meta["pin_groups"]:
         info(f"Pin groups: {len(dl_meta['pin_groups'])}, CPU: {dl_meta['cpu_freq_hz']}Hz")
