@@ -1660,8 +1660,6 @@ CMAKE_TEMPLATE = textwrap.dedent("""\
 
     set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
-    project({project_name} C ASM)
-
     # ===== Toolchain =====
     set(CMAKE_C_COMPILER   arm-none-eabi-gcc)
     set(CMAKE_CXX_COMPILER arm-none-eabi-g++)
@@ -1669,6 +1667,8 @@ CMAKE_TEMPLATE = textwrap.dedent("""\
     set(CMAKE_OBJCOPY      arm-none-eabi-objcopy)
     set(CMAKE_SIZE         arm-none-eabi-size)
     set(CMAKE_EXECUTABLE_SUFFIX .elf)
+
+    project({project_name} C ASM)       # NOTE: compiler variables MUST be set before project() so that CMake detects arm-none-eabi-gcc during the cross-compile probe. Setting them after project() is too late — CMake has already chosen a compiler.
 
     set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
