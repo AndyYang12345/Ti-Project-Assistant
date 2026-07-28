@@ -1657,10 +1657,7 @@ CMAKE_TEMPLATE = textwrap.dedent("""\
 
     set(CMAKE_SYSTEM_NAME Generic)
     set(CMAKE_SYSTEM_PROCESSOR cortex-m0plus)
-
     set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
-
-    project({project_name} C ASM)
 
     # ===== Toolchain =====
     set(CMAKE_C_COMPILER   arm-none-eabi-gcc)
@@ -1670,7 +1667,8 @@ CMAKE_TEMPLATE = textwrap.dedent("""\
     set(CMAKE_SIZE         arm-none-eabi-size)
     set(CMAKE_EXECUTABLE_SUFFIX .elf)
 
-    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+    # Compilers must be selected before project() enables C and ASM.
+    project({project_name} C ASM)
 
     # ===== MSPM0 SDK path =====
     set(SDK_DIR {sdk_dir}/source)
